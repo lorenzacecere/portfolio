@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lorenza Cecere — Progetti di analisi statistica</title>
+<meta name="description" content="Progetti di analisi statistica, network science e text mining realizzati in R durante la laurea magistrale in Scienze Statistiche per le Decisioni.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#EEEFEA;
+    --ink:#1B2A33;
+    --ink-soft:#556670;
+    --rule:#C6CABF;
+    --pine:#2E6B5E;
+    --ochre:#9C7420;
+    --measure:34rem;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0;
+    background:var(--paper);
+    color:var(--ink);
+    font-family:"IBM Plex Sans",system-ui,sans-serif;
+    font-size:17px;
+    line-height:1.62;
+  }
+  .wrap{
+    max-width:52rem;
+    margin:0 auto;
+    padding:4.5rem 1.5rem 5rem;
+  }
+
+  /* ---------- intestazione ---------- */
+  .name{
+    font-family:Fraunces,Georgia,serif;
+    font-weight:600;
+    font-size:clamp(2.4rem,7vw,3.6rem);
+    line-height:1.05;
+    letter-spacing:-.015em;
+    margin:0 0 1.1rem;
+  }
+  .intro{
+    max-width:var(--measure);
+    font-size:1.06rem;
+    color:var(--ink-soft);
+    margin:0 0 1.6rem;
+  }
+  .intro strong{color:var(--ink);font-weight:600}
+
+  .contatti{
+    display:flex;
+    flex-wrap:wrap;
+    gap:.45rem 1.5rem;
+    padding:0;margin:0;
+    list-style:none;
+    font-size:.95rem;
+  }
+  .contatti a{color:var(--pine);text-decoration:none;border-bottom:1px solid rgba(46,107,94,.35);padding-bottom:1px}
+  .contatti a:hover{border-bottom-color:var(--pine)}
+
+  /* ---------- progetti ---------- */
+  .lavori{
+    margin-top:3.6rem;
+    border-top:1px solid var(--rule);
+  }
+
+  article{
+    display:grid;
+    grid-template-columns:140px 1fr;
+    gap:2rem;
+    align-items:start;
+    padding:2.6rem 0;
+    border-bottom:1px solid var(--rule);
+  }
+  .glifo{
+    padding-top:.4rem;
+  }
+  .glifo svg{display:block;width:100%;height:auto;overflow:visible}
+  .glifo figcaption{
+    font-size:.78rem;
+    color:var(--ink-soft);
+    margin-top:.5rem;
+    line-height:1.35;
+  }
+
+  h2{
+    font-family:Fraunces,Georgia,serif;
+    font-weight:600;
+    font-size:1.45rem;
+    line-height:1.25;
+    margin:0 0 .3rem;
+    letter-spacing:-.01em;
+  }
+  .corso{
+    font-size:.88rem;
+    color:var(--ink-soft);
+    margin:0 0 .9rem;
+  }
+  .descr{
+    max-width:var(--measure);
+    margin:0 0 1.1rem;
+  }
+  .metodi{
+    list-style:none;
+    display:flex;
+    flex-wrap:wrap;
+    gap:.35rem .5rem;
+    padding:0;
+    margin:0 0 1.2rem;
+    max-width:var(--measure);
+  }
+  .metodi li{
+    font-size:.82rem;
+    color:var(--ink-soft);
+    border:1px solid var(--rule);
+    border-radius:2px;
+    padding:.1rem .5rem;
+    background:rgba(255,255,255,.45);
+  }
+  .azioni{
+    display:flex;
+    flex-wrap:wrap;
+    gap:.5rem .75rem;
+  }
+  .azioni a{
+    font-size:.92rem;
+    font-weight:500;
+    text-decoration:none;
+    padding:.4rem .85rem;
+    border-radius:2px;
+  }
+  .primaria{background:var(--ink);color:var(--paper)}
+  .primaria:hover{background:var(--pine)}
+  .secondaria{color:var(--ink);border:1px solid var(--rule)}
+  .secondaria:hover{border-color:var(--ink)}
+
+  .nota-coppia{
+    font-size:.85rem;
+    color:var(--ink-soft);
+    margin:.9rem 0 0;
+    max-width:var(--measure);
+  }
+
+  footer{
+    margin-top:2.6rem;
+    font-size:.88rem;
+    color:var(--ink-soft);
+    max-width:var(--measure);
+  }
+  footer a{color:var(--pine)}
+
+  a:focus-visible{outline:2px solid var(--ochre);outline-offset:3px}
+
+  @media (max-width:640px){
+    .wrap{padding:3rem 1.25rem 4rem}
+    article{grid-template-columns:1fr;gap:1.2rem;padding:2.2rem 0}
+    .glifo{max-width:150px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1 class="name">Lorenza Cecere</h1>
+    <p class="intro">Sto completando la <strong>laurea magistrale in Scienze Statistiche per le Decisioni</strong> all'Università Federico II di Napoli. Qui raccolgo tre analisi svolte in R durante il percorso: modellazione di regressione, analisi di reti e text mining. Ogni progetto è consultabile per intero, codice incluso.</p>
+    <ul class="contatti">
+      <li><a href="mailto:lorenzac.analytics@gmail.com">lorenzac.analytics@gmail.com</a></li>
+      <li><a href="https://github.com/lorenzacecere">GitHub</a></li>
+      <li><a href="https://linkedin.com/in/lorenza-cecere-987579325">LinkedIn</a></li>
+    </ul>
+  </header>
+
+  <main class="lavori">
+    <!-- ============ 1. ENERGY EFFICIENCY ============ -->
+    <article>
+      <figure class="glifo">
+        <svg viewBox="0 0 120 44" role="img" aria-label="Diagramma a dispersione con retta di regressione">
+          <g fill="#556670" opacity=".75">
+            <circle cx="8" cy="35" r="1.8"/><circle cx="19" cy="33" r="1.8"/>
+            <circle cx="24" cy="36" r="1.8"/><circle cx="35" cy="28" r="1.8"/>
+            <circle cx="41" cy="31" r="1.8"/><circle cx="52" cy="24" r="1.8"/>
+            <circle cx="58" cy="27" r="1.8"/><circle cx="66" cy="19" r="1.8"/>
+            <circle cx="74" cy="22" r="1.8"/><circle cx="83" cy="14" r="1.8"/>
+            <circle cx="91" cy="17" r="1.8"/><circle cx="101" cy="10" r="1.8"/>
+            <circle cx="110" cy="12" r="1.8"/>
+          </g>
+          <path d="M4 36.5 L116 9.5" stroke="#2E6B5E" stroke-width="1.6" fill="none"/>
+        </svg>
+        <figcaption>Regressione lineare multipla</figcaption>
+      </figure>
+      <div>
+        <h2>Quali caratteristiche di un edificio ne determinano il fabbisogno di riscaldamento</h2>
+        <p class="corso">Esame di Applied Statistical Modeling, Università Federico II di Napoli, 2026</p>
+        <p class="descr">Analisi di 768 edifici simulati (Energy Efficiency Dataset, UCI) per capire quali caratteristiche geometriche pesano davvero sul carico di riscaldamento e per costruire un modello che regga fuori campione. Il lavoro insiste sul distinguere gli effetti realmente esplicativi dagli artefatti generati dalla struttura del disegno sperimentale.</p>
+        <ul class="metodi">
+          <li>Regressione lineare multipla</li>
+          <li>Trasformazione di Box-Cox</li>
+          <li>VIF e multicollinearità</li>
+          <li>Regressione robusta</li>
+          <li>Standard error HC3</li>
+          <li>Bootstrap</li>
+          <li>Test di Chow</li>
+          <li>K-fold cross-validation</li>
+        </ul>
+        <div class="azioni">
+          <a class="primaria" href="energy-efficiency.html">Leggi il report</a>
+          <a class="secondaria" href="energy-efficiency.pdf">Scarica il PDF</a>
+          <a class="secondaria" href="https://github.com/lorenzacecere/portfolio/tree/main/progetti/energy-efficiency">Codice R</a>
+        </div>
+      </div>
+    </article>
+
+    <!-- ============ 2. EUROVISION ============ -->
+    <article>
+      <figure class="glifo">
+        <svg viewBox="0 0 120 44" role="img" aria-label="Grafo di una rete con nodi e collegamenti">
+          <g stroke="#556670" stroke-width=".9" opacity=".55">
+            <path d="M22 12 L48 22"/><path d="M22 12 L16 30"/><path d="M16 30 L48 22"/>
+            <path d="M48 22 L74 11"/><path d="M48 22 L70 33"/><path d="M74 11 L98 20"/>
+            <path d="M70 33 L98 20"/><path d="M74 11 L70 33"/><path d="M98 20 L104 36"/>
+            <path d="M16 30 L40 38"/><path d="M40 38 L70 33"/>
+          </g>
+          <g fill="#556670">
+            <circle cx="22" cy="12" r="2.4"/><circle cx="16" cy="30" r="2.4"/>
+            <circle cx="74" cy="11" r="2.4"/><circle cx="70" cy="33" r="2.4"/>
+            <circle cx="40" cy="38" r="2.4"/><circle cx="104" cy="36" r="2.4"/>
+            <circle cx="98" cy="20" r="3"/>
+          </g>
+          <circle cx="48" cy="22" r="4.6" fill="#2E6B5E"/>
+        </svg>
+        <figcaption>Rete del televoto</figcaption>
+      </figure>
+      <div>
+        <h2>Come si vota all'Eurovision: struttura del televoto e temi delle canzoni</h2>
+        <p class="corso">Esame di Network Science &amp; Text Mining, Università Federico II di Napoli, 2026</p>
+        <p class="descr">Doppio approccio sull'edizione 2021. Il grafo dei flussi di televoto viene analizzato per misurare centralità, individuare comunità di paesi e verificare se le alleanze di voto siano geografiche o culturali. In parallelo, i testi delle tre finaliste vengono sottoposti a sentiment analysis e a un'analisi delle corrispondenze che associa artisti e profili emotivi.</p>
+        <ul class="metodi">
+          <li>Network science</li>
+          <li>Misure di centralità</li>
+          <li>Community detection (Louvain, Walktrap, Girvan-Newman)</li>
+          <li>Rete multilayer</li>
+          <li>Ego network</li>
+          <li>Sentiment analysis (NRC)</li>
+          <li>Analisi delle corrispondenze</li>
+        </ul>
+        <div class="azioni">
+          <a class="primaria" href="eurovision-2021.html">Leggi il report</a>
+          <a class="secondaria" href="eurovision-2021.pdf">Scarica il PDF</a>
+          <a class="secondaria" href="https://github.com/lorenzacecere/portfolio/tree/main/progetti/eurovision-2021">Codice R</a>
+        </div>
+        <p class="nota-coppia">Progetto svolto in coppia. Contributo condiviso su entrambe le parti.</p>
+      </div>
+    </article>
+
+    <!-- ============ 3. SPOTIFY ============ -->
+    <article>
+      <figure class="glifo">
+        <svg viewBox="0 0 120 44" role="img" aria-label="Curva di crescita delle pubblicazioni scientifiche dal 2000 al 2024">
+          <path d="M0,37.2 5.0,36.7 10.0,37.4 15.0,36.2 20.0,36.2 25.0,35.1 30.0,34.8 35.0,34.4 40.0,35.3 45.0,35.4 50.0,35.5 55.0,33.7 60.0,33.8 65.0,32.4 70.0,32.9 75.0,31.1 80.0,27.8 85.0,28.3 90.0,24.3 95.0,22.1 100.0,17.3 105.0,13.4 110.0,11.8 115.0,6.3 120.0,2.0"
+                fill="none" stroke="#2E6B5E" stroke-width="1.6" stroke-linejoin="round"/>
+          <path d="M0 40.5 L120 40.5" stroke="#C6CABF" stroke-width="1"/>
+        </svg>
+        <figcaption>Pubblicazioni su Spotify, 2000–2024</figcaption>
+      </figure>
+      <div>
+        <h2>Una consulenza scientifica per Spotify</h2>
+        <p class="corso">Esame di Analisi quantitativa della scienza, Università degli Studi di Siena, giugno 2025</p>
+        <p class="descr">Report commissionato idealmente da Spotify per capire che impatto la piattaforma abbia avuto sulla ricerca accademica. Partendo da un'estrazione Scopus, l'analisi ricostruisce filoni di ricerca, riviste, paesi e centri coinvolti, e mappa le reti di co-autorialità, co-citazione e accoppiamento bibliografico. Ne emerge un campo produttivo ma frammentato, senza gruppi di ricerca consolidati.</p>
+        <ul class="metodi">
+          <li>Analisi bibliometrica</li>
+          <li>Reti citazionali</li>
+          <li>PageRank e centralità</li>
+          <li>Mappe di co-occorrenza</li>
+          <li>bibliometrix</li>
+          <li>VOSviewer</li>
+          <li>Gephi</li>
+        </ul>
+        <div class="azioni">
+          <a class="primaria" href="spotify-bibliometria.pdf">Leggi il report (PDF)</a>
+          <a class="secondaria" href="https://github.com/lorenzacecere/portfolio/tree/main/progetti/spotify-bibliometria">Dettagli</a>
+        </div>
+      </div>
+    </article>
+  </main>
+
+  <footer>
+    <p>Codice e report completi su <a href="https://github.com/lorenzacecere/portfolio">github.com/lorenzacecere/portfolio</a>.</p>
+  </footer>
+
+</div>
+</body>
+</html>

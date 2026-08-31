@@ -1,0 +1,594 @@
+---
+title: "Analisi statistica dei fattori che influenzano il Carico di Riscaldamento degli edifici"
+subtitle: "Energy Efficiency Dataset (Tsanas & Xifara, 2012) - UCI Machine Learning Repository"
+format:
+  html:
+    embed-resources: true
+  pdf: default
+editor: visual
+echo: true
+---
+
+```{r setup}
+#| include: false
+library(car)
+library(MASS)
+library(glmnet)
+library(leaps)
+library(lmtest)
+library(robustbase)
+library(corrplot)
+library(ggplot2)
+library(gridExtra)
+library(sandwich)
+library(modelr)
+library(boot)
+```
+
+# Introduzione e obiettivo dell'analisi
+
+Il dataset utilizzato è l'Energy Efficiency Dataset di Tsanas e Xifara (2012), disponibile presso lo UCI Machine Learning Repository. Contiene 768 osservazioni, ciascuna corrispondente a un edificio residenziale generato tramite simulazione energetica con il software Ecotect, a partire da 12 forme base di edificio combinate con diverse caratteristiche di orientamento, area vetrata e distribuzione della vetratura. Per ciascun edificio sono disponibili otto caratteristiche geometriche e due variabili risposta, il carico di riscaldamento e il carico di raffreddamento.
+
+L'obiettivo di questa analisi è duplice. Da un lato si vuole individuare quali caratteristiche geometriche dell'edificio influenzano maggiormente il fabbisogno di riscaldamento, con particolare attenzione a distinguere effetti realmente esplicativi da artefatti dovuti alla struttura del disegno sperimentale. Dall'altro si vuole costruire un modello predittivo affidabile, verificandone sia la validità delle assunzioni inferenziali sia la capacità di generalizzare a osservazioni non utilizzate per la stima. Data l'elevatissima correlazione tra le due variabili risposta (che verrà quantificata più avanti), l'analisi si concentra sul carico di riscaldamento, essendo le conclusioni per il carico di raffreddamento in larga parte sovrapponibili.
+
+# Setup, caricamento e preparazione dei dati
+
+Le variabili originali sono codificate con nomi non descrittivi (X1, ..., X8, Y1, Y2); vengono rinominate per rendere l'analisi più leggibile. Due variabili, l'orientamento dell'edificio e lo schema di distribuzione della superficie vetrata, sono rappresentate nel file come codici numerici interi ma descrivono in realtà categorie qualitative (punti cardinali e schemi di distribuzione): è necessario convertirle esplicitamente in fattori, altrimenti verrebbero trattate in modo scorretto come variabili numeriche continue da un eventuale modello di regressione.
+
+```{r}
+dati <- read.csv("ENB2012_data.csv")
+
+colnames(dati) <- c("CompattezzaRelativa", "SuperficieTotale", "SuperficiePareti",
+                     "SuperficieTetto", "AltezzaComplessiva", "Orientamento",
+                     "AreaVetrata", "DistribAreaVetrata", "CaricoRiscaldamento",
+                     "CaricoRaffreddamento")
+
+dati$Orientamento <- factor(dati$Orientamento,
+                             levels = c(2,3,4,5),
+                             labels = c("Nord","Est","Sud","Ovest"))
+dati$DistribAreaVetrata <- factor(dati$DistribAreaVetrata,
+                                   levels = c(0,1,2,3,4,5),
+                                   labels = c("Nessuna","Uniforme","Nord","Est","Sud","Ovest"))
+```
+
+Prima di procedere è opportuno verificare la struttura del dataset e la qualità dei dati: numero di osservazioni e variabili, tipo di ciascuna variabile, presenza di valori mancanti.
+
+```{r}
+nrow(dati)
+ncol(dati)
+str(dati)
+```
+
+```{r}
+colSums(is.na(dati))
+```
+
+Il dataset è costituito da 768 osservazioni e 10 variabili, senza alcun valore mancante: non è necessaria alcuna imputazione né eliminazione di osservazioni.
+
+```{r}
+summary(dati[, c("CompattezzaRelativa","SuperficieTotale","SuperficiePareti",
+                  "SuperficieTetto","AltezzaComplessiva","AreaVetrata",
+                  "CaricoRiscaldamento","CaricoRaffreddamento")])
+```
+
+Le variabili si muovono su scale molto diverse tra loro. Il carico di riscaldamento assume valori compresi tra 6.01 e 43.10, con una media di 22.31. Un aspetto strutturale importante, che condizionerà diverse scelte successive, è che l'altezza complessiva dell'edificio assume esclusivamente due valori, 3.5 e 7 metri: non è un errore nei dati, ma il riflesso del numero limitato di configurazioni geometriche effettivamente simulate nella costruzione del dataset.
+
+```{r}
+table(dati$Orientamento)
+table(dati$DistribAreaVetrata)
+```
+
+L'orientamento è perfettamente bilanciato (192 osservazioni per ciascuno dei quattro punti cardinali), mentre la distribuzione dell'area vetrata presenta una categoria, "Nessuna", con numerosità inferiore (48 osservazioni contro le 144 delle altre cinque): questo è coerente con il disegno sperimentale, in cui l'assenza di vetratura implica automaticamente l'assenza di uno schema di distribuzione da assegnare.
+
+# Analisi esplorativa dei dati
+
+## Distribuzione della variabile risposta
+
+```{r}
+#| fig-width: 10
+#| fig-height: 4
+par(mfrow = c(1,2))
+hist(dati$CaricoRiscaldamento, breaks = 30, col = "steelblue",
+     main = "Carico di Riscaldamento (Y1)", xlab = "CaricoRiscaldamento", ylab = "Frequenza")
+hist(dati$CaricoRaffreddamento, breaks = 30, col = "tomato",
+     main = "Carico di Raffreddamento (Y2)", xlab = "CaricoRaffreddamento", ylab = "Frequenza")
+par(mfrow = c(1,1))
+```
+
+Entrambi gli istogrammi mostrano una distribuzione non unimodale, con più addensamenti di frequenza lungo l'asse anziché un'unica campana centrata sulla media. Questo comportamento anticipa un aspetto che tornerà più volte nell'analisi: la risposta dipende fortemente da poche variabili che assumono un numero limitato di combinazioni possibili, e ciascuna combinazione genera un piccolo gruppo di edifici con carico simile, da cui i vari picchi osservati.
+
+```{r}
+skew <- function(x) {
+  n <- length(x); m <- mean(x); s <- sd(x)
+  (sum((x - m)^3) / n) / s^3
+}
+cat("Skewness CaricoRiscaldamento:", round(skew(dati$CaricoRiscaldamento), 3), "\n")
+cat("Skewness CaricoRaffreddamento:", round(skew(dati$CaricoRaffreddamento), 3), "\n")
+```
+
+L'indice di asimmetria si colloca, per entrambe le variabili, in un intervallo generalmente considerato compatibile con una distribuzione pressoché simmetrica. È importante però non fermarsi a questo solo indicatore: la skewness misura la mancanza di simmetria attorno alla media, non la multimodalità osservata negli istogrammi. Una distribuzione può avere skewness vicina a zero e presentare comunque più picchi, come accade qui. La decisione definitiva sull'eventuale necessità di una trasformazione della risposta viene quindi rimandata ai test diagnostici formali condotti sui residui del modello, strumenti più appropriati di un indice descrittivo calcolato sulla variabile grezza.
+
+## Relazioni tra i predittori e la risposta
+
+Un'analisi corretta non può fermarsi alla correlazione globale, che cattura solo relazioni lineari aggregate: è necessario ispezionare visivamente la relazione di ciascun predittore con la risposta.
+
+```{r}
+#| warning: false
+#| fig-width: 10
+#| fig-height: 7
+pred_numerici <- c("CompattezzaRelativa", "SuperficieTotale", "SuperficiePareti",
+                    "SuperficieTetto", "AltezzaComplessiva", "AreaVetrata")
+lista_scatter <- lapply(pred_numerici, function(v) {
+  ggplot(dati, aes_string(x = v, y = "CaricoRiscaldamento")) +
+    geom_point(alpha = 0.25, color = "steelblue", size = 0.9) +
+    geom_smooth(method = "lm", se = FALSE, color = "firebrick", linewidth = 0.7) +
+    labs(title = v, x = NULL, y = "CaricoRiscaldamento") +
+    theme_minimal(base_size = 10)
+})
+grid.arrange(grobs = lista_scatter, ncol = 3)
+```
+
+Il pattern che emerge in quasi tutti i pannelli è lo stesso: i punti non si distribuiscono su un continuo dell'asse orizzontale, ma si concentrano in bande verticali strette, corrispondenti al numero limitato di combinazioni geometriche effettivamente presenti nel dataset. Questo riflette il vincolo di volume costante mantenuto nella simulazione, che lega tra loro compattezza, superficie totale, superficie delle pareti e superficie del tetto. All'interno di ciascuna banda si osserva comunque una dispersione residua non trascurabile: edifici con la stessa caratteristica geometrica possono avere carichi di riscaldamento diversi, segno che il fenomeno è multifattoriale e che nessun singolo predittore, da solo, è sufficiente a spiegarlo. Le rette confermano relazioni positive per Compattezza Relativa, Superficie Pareti e Area Vetrata, negative per Superficie Totale e Superficie Tetto.
+
+Due predittori, Altezza Complessiva e Area Vetrata, assumono un numero di valori così limitato da rendere la retta di regressione semplice poco informativa (nel caso di Altezza Complessiva, la retta collega semplicemente le medie di due soli gruppi). Per questi due casi un boxplot per livello è una rappresentazione più onesta della vera struttura dei dati.
+
+```{r}
+#| fig-width: 10
+#| fig-height: 4
+g1 <- ggplot(dati, aes(x = factor(AreaVetrata), y = CaricoRiscaldamento)) +
+  geom_boxplot(fill = "steelblue", alpha = 0.5) +
+  labs(title = "Area Vetrata", x = "AreaVetrata") + theme_minimal(base_size = 10)
+g2 <- ggplot(dati, aes(x = factor(AltezzaComplessiva), y = CaricoRiscaldamento)) +
+  geom_boxplot(fill = "purple", alpha = 0.5) +
+  labs(title = "Altezza Complessiva", x = "AltezzaComplessiva") + theme_minimal(base_size = 10)
+g3 <- ggplot(dati, aes(x = factor(Orientamento), y = CaricoRiscaldamento)) +
+  geom_boxplot(fill = "tomato", alpha = 0.5) +
+  labs(title = "Orientamento", x = "Orientamento") + theme_minimal(base_size = 10)
+grid.arrange(g1, g2, g3, ncol = 3)
+```
+
+Il boxplot di Area Vetrata mostra una relazione crescente e pressoché monotona: al crescere della percentuale di superficie vetrata l'intera distribuzione del carico si sposta verso l'alto, non solo alcuni valori estremi. Quello di Altezza Complessiva, pur trattandosi di una variabile a due soli livelli, rivela una differenza sostanziale tra i due gruppi, con sovrapposizione limitata: è già visibile da qui che questa variabile giocherà un ruolo centrale nel modello. Il boxplot di Orientamento mostra invece quattro distribuzioni pressoché sovrapponibili, un'indicazione preliminare — da verificare formalmente — che questa variabile non abbia un effetto sistematico sul carico di riscaldamento.
+
+# Verifica preliminare dell'effetto dell'Orientamento: ANOVA
+
+Prima di costruire il modello di regressione multipla conviene chiarire subito se l'orientamento cardinale dell'edificio vada incluso tra i predittori. Anticipare questa verifica, anziché scoprirla a posteriori osservando i p-value non significativi in un modello con tutti i predittori, permette di prendere una decisione motivata sulla specificazione del modello prima di stimarlo, e non dopo.
+
+```{r}
+mod_anova <- aov(CaricoRiscaldamento ~ Orientamento, data = dati)
+summary(mod_anova)
+tapply(dati$CaricoRiscaldamento, dati$Orientamento, mean)
+```
+
+Il test F restituisce un valore di 0.005 con un p-value di 0.999: un risultato lontanissimo dalla soglia di significatività, che non fornisce alcuna evidenza contro l'ipotesi di uguaglianza delle medie tra i quattro orientamenti. Le medie di gruppo, quasi identiche (tutte comprese tra 22.26 e 22.38), confermano questa lettura. Un valore di F così vicino a zero non è solo "non significativo": è anche più basso di quanto ci si aspetterebbe in media sotto la sola ipotesi nulla (il valore atteso di F sotto H0 è circa 1), un'indicazione che le medie non sono solo statisticamente indistinguibili per effetto del campionamento, ma strutturalmente quasi identiche per costruzione del dataset stesso.
+
+## Verifica delle assunzioni dell'ANOVA
+
+```{r}
+bartlett.test(CaricoRiscaldamento ~ Orientamento, data = dati)
+shapiro.test(residuals(mod_anova))
+```
+
+```{r}
+#| fig-width: 5
+#| fig-height: 5
+qqnorm(residuals(mod_anova), main = "QQ-plot residui ANOVA - Orientamento")
+qqline(residuals(mod_anova), col = "red")
+```
+
+Il test di Bartlett non fornisce alcuna evidenza contro l'omogeneità delle varianze tra i quattro gruppi (p = 0.9998): questa assunzione è pienamente soddisfatta, coerentemente con un disegno sperimentale in cui l'orientamento si ottiene ruotando la stessa identica forma di edificio, senza alterarne alcuna altra caratteristica geometrica. Il test di Shapiro-Wilk, al contrario, rigetta nettamente la normalità dei residui (p \< 2.2e-16). Il QQ-plot spiega il motivo: non una nuvola di scostamenti casuali, ma un andamento a gradini, coerente con la natura discreta e multimodale della risposta già osservata nell'analisi esplorativa.
+
+Questa violazione non compromette la conclusione sostanziale del test. Il test F si basa sulle medie di gruppo, non sui singoli valori individuali: per il teorema del limite centrale, la distribuzione campionaria di una media converge alla normalità al crescere della numerosità, indipendentemente dalla distribuzione dei dati di partenza. Con 192 osservazioni per gruppo questa condizione è ampiamente soddisfatta. La robustezza del test F alla non normalità è inoltre nota per dipendere in modo particolare da due condizioni concomitanti, gruppi sbilanciati e varianze eterogenee: nessuna delle due si presenta in questo caso, essendo il disegno perfettamente bilanciato e le varianze omogenee. Il risultato ottenuto, un p-value così distante dalla soglia critica, lascia inoltre un margine tale da non lasciare spazio a dubbi sulla conclusione sostanziale.
+
+**Decisione**: sulla base di questo test preliminare, Orientamento viene escluso dai predittori del modello di regressione multipla.
+
+# Analisi delle correlazioni tra le variabili
+
+```{r}
+var_numeriche <- dati[, c("CompattezzaRelativa","SuperficieTotale","SuperficiePareti",
+                           "SuperficieTetto","AltezzaComplessiva","AreaVetrata",
+                           "CaricoRiscaldamento","CaricoRaffreddamento")]
+matrice_cor <- cor(var_numeriche)
+round(matrice_cor, 2)
+```
+
+```{r}
+#| fig-width: 7
+#| fig-height: 7
+corrplot(matrice_cor, method = "color", type = "upper",
+         addCoef.col = "black", tl.col = "black", tl.srt = 45,
+         number.cex = 0.7, title = "Matrice di correlazione", mar = c(0,0,2,0))
+```
+
+Vanno distinti due tipi di relazione. Il primo riguarda l'associazione tra i predittori e la risposta: Altezza Complessiva è il predittore più fortemente associato a Carico di Riscaldamento (0.89), seguito da Superficie Tetto (-0.86), Superficie Totale (-0.66), Compattezza Relativa (0.62) e Superficie Pareti (0.46); Area Vetrata mostra un'associazione più debole ma non trascurabile (0.27). Il secondo tipo di relazione, molto più rilevante per le fasi successive, riguarda le correlazioni tra i predittori stessi: Compattezza Relativa e Superficie Totale sono correlate a -0.99, un valore prossimo alla correlazione perfetta, e correlazioni altrettanto elevate si osservano tra Altezza Complessiva e Superficie Tetto (-0.97), tra Compattezza Relativa e Superficie Tetto (-0.87) e tra Superficie Totale e Superficie Tetto (0.88). Questo pattern non è casuale: nel disegno sperimentale il volume complessivo dell'edificio è tenuto costante in tutte le simulazioni, generando un vincolo geometrico che lega necessariamente queste quattro variabili. Questa osservazione anticipa il problema di multicollinearità che verrà formalizzato più avanti tramite il VIF.
+
+Infine, la correlazione tra le due variabili risposta è pari a 0.976: un valore così elevato giustifica la scelta di concentrare l'intera analisi sul carico di riscaldamento, essendo i risultati per l'altra variabile in larga parte ridondanti.
+
+# Modello di regressione lineare multipla
+
+Si stima un modello con tutti i predittori disponibili, ad eccezione di Orientamento, già escluso sulla base del test ANOVA preliminare.
+
+```{r}
+mod_completo <- lm(CaricoRiscaldamento ~ CompattezzaRelativa + SuperficieTotale + SuperficiePareti +
+                    SuperficieTetto + AltezzaComplessiva + AreaVetrata + DistribAreaVetrata,
+                    data = dati)
+summary(mod_completo)
+```
+
+Il modello raggiunge un R quadro di 0.9241, indicando che circa il 92% della variabilità del carico di riscaldamento è spiegato dalle variabili incluse, con un test F complessivo altamente significativo. Il coefficiente di Superficie Tetto non viene stimato (NA), segnalato da R come non definito a causa di singolarità: è la conseguenza diretta della collinearità perfetta anticipata dalla matrice di correlazione, che rende impossibile separare l'effetto di questa variabile da quello delle altre variabili geometriche ad essa correlate.
+
+Il dato più rilevante riguarda il segno del coefficiente di Compattezza Relativa: nella matrice di correlazione la relazione bivariata con il carico di riscaldamento era positiva (0.62), mentre nel modello multiplo il coefficiente stimato è fortemente negativo (-64.77). Non è un errore di calcolo, ma la manifestazione diretta della multicollinearità: quando due o più predittori sono fortemente correlati tra loro, il modello distribuisce il loro effetto congiunto in modo instabile, e il segno del singolo coefficiente può risultare fuorviante o addirittura invertito rispetto alla relazione osservata a livello bivariato. Questo segnale, insieme al coefficiente non definito per Superficie Tetto, rende necessaria una diagnosi più approfondita prima di trarre conclusioni sui singoli effetti.
+
+## Diagnostica del modello completo
+
+```{r}
+#| fig-width: 8
+#| fig-height: 7
+par(mfrow = c(2,2))
+plot(mod_completo)
+par(mfrow = c(1,1))
+```
+
+Il grafico dei residui contro i valori stimati mostra una struttura sistematica, non una nuvola casuale attorno allo zero: un primo segnale di eteroschedasticità e possibile non linearità. Il QQ-plot mostra scostamenti marcati nelle code, segno di code più pesanti di una normale. Lo Scale-Location conferma la stessa lettura, con la linea di tendenza non piatta. Il grafico dei residui contro il leverage mostra invece che tutte le osservazioni restano ben all'interno delle curve di distanza di Cook.
+
+```{r}
+hat_vals <- hatvalues(mod_completo)
+n <- nrow(dati)
+p <- length(coef(mod_completo)) - sum(is.na(coef(mod_completo)))
+soglia_leverage <- 2 * p / n
+cat("Soglia di leverage (2p/n):", round(soglia_leverage, 4), "\n")
+cat("Osservazioni con leverage elevato:", sum(hat_vals > soglia_leverage), "su", n, "\n")
+
+cook_vals <- cooks.distance(mod_completo)
+cat("Osservazioni con Cook > 1:", sum(cook_vals > 1), "\n")
+head(sort(cook_vals, decreasing = TRUE), 5)
+```
+
+Dodici osservazioni su 768 superano la soglia di leverage elevato (2p/n = 0.0286), una quota che rimane comunque contenuta rispetto al totale, e soprattutto nessuna osservazione presenta una distanza di Cook superiore a 1: il leverage segnala punti "estremi" nei predittori, ma la distanza di Cook, che ne misura l'effettiva influenza sulle stime, esclude che queste osservazioni stiano distorcendo il modello. Questo permette di escludere che le anomalie diagnostiche viste nei grafici dipendano da poche osservazioni isolate: il problema, se esiste, è diffuso nell'intero modello.
+
+```{r}
+bptest(mod_completo)
+shapiro.test(residuals(mod_completo))
+```
+
+Il test di Breusch-Pagan rigetta nettamente l'omoschedasticità (p \< 2.2e-16), e il test di Shapiro-Wilk rigetta altrettanto nettamente la normalità dei residui. Il quadro complessivo indica la presenza di due problemi diagnostici sistemici, che riguardano l'intero modello e non porzioni isolate di esso.
+
+# Trasformazione di Box-Cox
+
+Prima di ricorrere a metodi di stima alternativi, si valuta se una trasformazione della risposta possa attenuare i due problemi diagnosticati.
+
+```{r}
+min(dati$CaricoRiscaldamento)
+```
+
+```{r}
+#| fig-width: 6
+#| fig-height: 5
+bc <- boxcox(mod_completo, lambda = seq(-2, 2, by = 0.1))
+```
+
+```{r}
+lambda_ottimo <- bc$x[which.max(bc$y)]
+cat("Lambda ottimo:", round(lambda_ottimo, 3), "\n")
+ic_idx <- which(bc$y > max(bc$y) - qchisq(0.95, 1)/2)
+cat("IC 95% per lambda: [", round(min(bc$x[ic_idx]), 2), ",", round(max(bc$x[ic_idx]), 2), "]\n")
+```
+
+Il lambda ottimo è pari a 0, con un intervallo di confidenza al 95% che include lo zero: la trasformazione logaritmica è compatibile con i dati ed è la scelta naturale, oltre che la più immediatamente interpretabile tra le trasformazioni della famiglia Box-Cox.
+
+```{r}
+dati$logCaricoRiscaldamento <- log(dati$CaricoRiscaldamento)
+
+mod_log <- lm(logCaricoRiscaldamento ~ CompattezzaRelativa + SuperficieTotale + SuperficiePareti +
+              SuperficieTetto + AltezzaComplessiva + AreaVetrata + DistribAreaVetrata, data = dati)
+summary(mod_log)
+```
+
+```{r}
+cat("Shapiro-Wilk - modello originale: p =", format.pval(shapiro.test(residuals(mod_completo))$p.value, digits = 3), "\n")
+cat("Shapiro-Wilk - modello log:       p =", format.pval(shapiro.test(residuals(mod_log))$p.value, digits = 3), "\n")
+cat("Breusch-Pagan - modello originale: p =", format.pval(bptest(mod_completo)$p.value, digits = 3), "\n")
+cat("Breusch-Pagan - modello log:       p =", format.pval(bptest(mod_log)$p.value, digits = 3), "\n")
+```
+
+```{r}
+#| fig-width: 9
+#| fig-height: 4.5
+par(mfrow = c(1,2))
+qqnorm(residuals(mod_completo), main = "QQ-plot - originale")
+qqline(residuals(mod_completo), col = "red")
+qqnorm(residuals(mod_log), main = "QQ-plot - log")
+qqline(residuals(mod_log), col = "red")
+par(mfrow = c(1,1))
+```
+
+Il test di Shapiro-Wilk migliora in modo sostanziale, con il p-value che passa da 9.51e-16 a 2.15e-10: un miglioramento di diversi ordini di grandezza, senza però raggiungere la soglia di non significatività. Il confronto tra i due QQ-plot mostra la stessa storia in forma grafica: nel modello trasformato la parte centrale aderisce molto meglio alla retta teorica, ma alcuni punti nella coda superiore restano nettamente distanti. Il test di Breusch-Pagan, al contrario, non mostra alcun miglioramento sostanziale, restando ampiamente sotto la soglia critica in entrambi i modelli. **La trasformazione logaritmica ha agito efficacemente sulla normalità, riducendola senza eliminarla del tutto, ma non ha risolto l'eteroschedasticità**, che resta una caratteristica strutturale del modello anche dopo il cambio di scala.
+
+# Multicollinearità: Variance Inflation Factor
+
+Le analisi precedenti hanno già fornito diverse indicazioni indirette di collinearità: il coefficiente non definito per Superficie Tetto, le correlazioni prossime all'unità nella matrice iniziale, l'instabilità di segno di Compattezza Relativa. Il VIF fornisce una diagnosi formale. Poiché non può essere calcolato in presenza di collinearità perfetta, il calcolo viene condotto su un modello ridotto che esclude Superficie Tetto.
+
+```{r}
+mod_ridotto <- lm(logCaricoRiscaldamento ~ CompattezzaRelativa + SuperficieTotale + SuperficiePareti +
+                   AltezzaComplessiva + AreaVetrata + DistribAreaVetrata, data = dati)
+vif(mod_ridotto)
+```
+
+Compattezza Relativa (10.27) e Superficie Totale (14.19) superano la soglia critica convenzionale di 10, mentre tutte le altre variabili presentano VIF prossimi a 1: il problema di collinearità è circoscritto al gruppo delle variabili geometriche legate al vincolo di volume costante, non è diffuso all'intero modello.
+
+```{r}
+mod_ridotto2 <- lm(logCaricoRiscaldamento ~ CompattezzaRelativa + SuperficiePareti +
+                    AltezzaComplessiva + AreaVetrata + DistribAreaVetrata, data = dati)
+vif(mod_ridotto2)
+```
+
+```{r}
+cat("R^2 modello con SuperficieTotale:   ", round(summary(mod_ridotto)$r.squared, 4), "\n")
+cat("R^2 modello senza SuperficieTotale: ", round(summary(mod_ridotto2)$r.squared, 4), "\n")
+```
+
+Rimuovendo Superficie Totale, tutti i VIF residui scendono sotto soglia (il più alto, Altezza Complessiva, si ferma a 3.10), e anche Compattezza Relativa scende da 10.27 a 3.04, confermando che la sua inflazione dipendeva quasi interamente dalla relazione con Superficie Totale. Il costo in R quadro è minimo (da 0.9551 a 0.9547, una perdita di 0.0004): si è dimostrato, non solo affermato, che l'informazione portata da Superficie Totale era in larga parte ridondante.
+
+# Selezione del modello
+
+Si applica una procedura di best subset selection sui predittori rimasti, confrontando tre criteri.
+
+```{r}
+best_sub <- regsubsets(logCaricoRiscaldamento ~ CompattezzaRelativa + SuperficiePareti +
+                        AltezzaComplessiva + AreaVetrata + DistribAreaVetrata,
+                        data = dati, nvmax = 9)
+sum_bs <- summary(best_sub)
+which.max(sum_bs$adjr2)
+which.min(sum_bs$cp)
+which.min(sum_bs$bic)
+```
+
+I tre criteri non convergono pienamente. R quadro aggiustato e Cp indicano entrambi come ottimo il modello a nove predittori, cioè quello che include tutte le variabili rimaste, senza suggerire ulteriori rimozioni. Il criterio BIC, più conservativo perché penalizza la complessità in modo più marcato (specialmente con un numero di osservazioni elevato come qui), seleziona invece un modello più parsimonioso a otto predittori. Questo disaccordo è un comportamento atteso: R quadro aggiustato e Cp tendono a favorire modelli più ricchi, BIC soluzioni più parsimoniose.
+
+```{r}
+coef(best_sub, 8)
+coef(best_sub, 9)
+```
+
+Il confronto tra le due soluzioni mostra che il criterio BIC esclude Compattezza Relativa. Poiché il suo coefficiente, come si vedrà nel modello finale, risulta comunque significativo secondo il test t individuale, e considerando l'interesse sostanziale nel mantenere un predittore geometrico primario per l'interpretazione fisica del fenomeno, si opta per la soluzione a nove predittori indicata da R quadro aggiustato e Cp, motivando esplicitamente questa scelta rispetto all'indicazione più conservativa di BIC.
+
+# Modello finale
+
+```{r}
+mod_finale <- lm(logCaricoRiscaldamento ~ CompattezzaRelativa + SuperficiePareti +
+                  AltezzaComplessiva + AreaVetrata + DistribAreaVetrata, data = dati)
+summary(mod_finale)
+```
+
+Il modello finale include cinque predittori (nove termini, contando i cinque livelli del fattore Distribuzione Area Vetrata), stimato sulla variabile risposta in scala logaritmica. Tutti i coefficienti risultano significativi al test t individuale, condizione necessaria affinché il modello finale contenga soltanto effetti effettivamente rilevanti — una volta che le assunzioni alla base dell'inferenza siano state adeguatamente verificate, verifica che viene condotta nella sezione seguente.
+
+## Diagnostica del modello finale
+
+```{r}
+#| fig-width: 8
+#| fig-height: 7
+par(mfrow = c(2,2))
+plot(mod_finale)
+par(mfrow = c(1,1))
+```
+
+```{r}
+bptest(mod_finale)
+shapiro.test(residuals(mod_finale))
+```
+
+```{r}
+cat("Breusch-Pagan - mod_completo: p =", format.pval(bptest(mod_completo)$p.value, digits = 3), "\n")
+cat("Breusch-Pagan - mod_finale:   p =", format.pval(bptest(mod_finale)$p.value, digits = 3), "\n")
+cat("Shapiro-Wilk  - mod_completo: p =", format.pval(shapiro.test(residuals(mod_completo))$p.value, digits = 3), "\n")
+cat("Shapiro-Wilk  - mod_finale:   p =", format.pval(shapiro.test(residuals(mod_finale))$p.value, digits = 3), "\n")
+```
+
+I due test diagnostici restano sostanzialmente invariati rispetto al modello con tutti i predittori (Breusch-Pagan: BP=241.04 contro BP=377.62 del modello completo, entrambi con p\<2.2e-16; Shapiro-Wilk: W=0.969 contro W=0.948, entrambi fortemente significativi). Questo risultato è informativo di per sé: conferma che l'eteroschedasticità e la non normalità residua non erano causate dalle variabili successivamente escluse (Orientamento, Superficie Totale), ma sono una caratteristica strutturale del dataset, riconducibile alla natura discreta e multimodale della variabile risposta.
+
+```{r}
+hat_vals <- hatvalues(mod_finale)
+n <- nrow(dati); p <- length(coef(mod_finale))
+cat("Soglia di leverage:", round(2*p/n, 4), " oss oltre soglia:", sum(hat_vals > 2*p/n), "su", n, "\n")
+cook_vals <- cooks.distance(mod_finale)
+cat("Osservazioni con Cook > 1:", sum(cook_vals > 1), " Cook massimo:", round(max(cook_vals), 4), "\n")
+```
+
+Nessuna osservazione risulta influente secondo la distanza di Cook: i problemi diagnostici osservati non sono attribuibili a punti isolati.
+
+## Verifica della forma funzionale: test RESET
+
+I test di Breusch-Pagan e Shapiro-Wilk assumono implicitamente che la parte sistematica del modello sia correttamente specificata. Il test di Ramsey RESET verifica questa assunzione, controllando se l'aggiunta di potenze dei valori stimati migliora significativamente l'adattamento del modello.
+
+```{r}
+resettest(mod_finale, power = 2:3, type = "fitted")
+```
+
+Il test RESET risulta significativo (p = 2.13e-10), suggerendo la presenza di una componente di non linearità non catturata dalla specificazione additiva attuale. Questo risultato, insieme a quanto emergerà dal test di Chow più avanti, motiva un approfondimento sulla stabilità strutturale del modello, condotto nella sezione dedicata.
+
+# Regressione robusta: verifica dell'influenza delle osservazioni
+
+La distanza di Cook non ha individuato osservazioni singolarmente dominanti, ma è utile verificare se una stima meno sensibile ai residui più estremi (che il metodo dei minimi quadrati amplifica quadraticamente) produca coefficienti sostanzialmente diversi da quelli OLS. Si confrontano due varianti di M-estimation: la funzione di Huber, che modera l'effetto dei residui grandi senza azzerarlo, e la funzione bisquare (stimata con il metodo MM), più aggressiva nel penalizzare gli outlier.
+
+```{r}
+mod_huber <- rlm(logCaricoRiscaldamento ~ CompattezzaRelativa + SuperficiePareti +
+                  AltezzaComplessiva + AreaVetrata + DistribAreaVetrata, data = dati)
+mod_bisq <- rlm(logCaricoRiscaldamento ~ CompattezzaRelativa + SuperficiePareti +
+                 AltezzaComplessiva + AreaVetrata + DistribAreaVetrata, data = dati, method = "MM")
+
+confronto_robusta <- data.frame(OLS = coef(mod_finale), Huber = coef(mod_huber), Bisquare = coef(mod_bisq))
+round(confronto_robusta, 4)
+```
+
+```{r}
+pesi_huber <- mod_huber$w
+cat("Osservazioni con peso Huber < 0.8:", sum(pesi_huber < 0.8), "su", nrow(dati), "\n")
+```
+
+I coefficienti restano complessivamente stabili in segno e ordine di grandezza tra i tre metodi, con Compattezza Relativa che mostra la maggiore variabilità (-0.258 OLS, -0.206 Huber, +0.160 bisquare) — coerente con la storia di collinearità di questa variabile già documentata. Un numero non trascurabile di osservazioni (203 su 768) riceve un peso inferiore a 0.8 nella stima di Huber: questo riflette la natura del dataset più che la presenza di outlier isolati, essendo coerente con la distanza di Cook che non aveva segnalato alcuna osservazione come singolarmente dominante. La regressione robusta conferma quindi che **nessuna singola osservazione sta distorcendo il modello**, ma segnala un'instabilità diffusa concentrata soprattutto sul coefficiente di Compattezza Relativa — un indizio che verrà chiarito definitivamente dal test di Chow.
+
+# Correzione dell'inferenza in presenza di eteroschedasticità
+
+Poiché l'eteroschedasticità persiste anche dopo la trasformazione logaritmica e la selezione delle variabili, gli standard error riportati dal summary del modello, calcolati sotto l'assunzione classica di varianza costante, non sono pienamente affidabili. È importante essere precisi sul rimedio corretto: la regressione robusta appena vista risolve un problema diverso (l'influenza sproporzionata di osservazioni con residui grandi), non l'eteroschedasticità. Il rimedio adeguato per una varianza non costante è la correzione degli standard error, non un cambiamento del criterio di stima dei coefficienti.
+
+## Standard error robusti (sandwich estimator, HC3)
+
+```{r}
+se_hc3 <- coeftest(mod_finale, vcov = vcovHC(mod_finale, type = "HC3"))
+se_hc3
+```
+
+```{r}
+confronto_hc3 <- data.frame(
+  Stima  = coef(mod_finale),
+  SE_OLS = summary(mod_finale)$coefficients[, "Std. Error"],
+  SE_HC3 = sqrt(diag(vcovHC(mod_finale, type = "HC3")))
+)
+round(confronto_hc3, 4)
+```
+
+## Bootstrap (case resampling) come verifica indipendente
+
+Come controprova, si stima la variabilità dei coefficienti anche tramite bootstrap non parametrico con ricampionamento delle osservazioni complete: un approccio che non richiede alcuna assunzione sulla forma della varianza degli errori, basato su una logica completamente diversa da quella analitica dello stimatore sandwich.
+
+```{r}
+boot_fn <- function(data, indices) {
+  d <- data[indices, ]
+  fit <- lm(logCaricoRiscaldamento ~ CompattezzaRelativa + SuperficiePareti +
+            AltezzaComplessiva + AreaVetrata + DistribAreaVetrata, data = d)
+  coef(fit)
+}
+
+set.seed(123)
+boot_risultati <- boot(dati, boot_fn, R = 2000)
+se_boot <- apply(boot_risultati$t, 2, sd)
+names(se_boot) <- names(coef(mod_finale))
+
+confronto_completo <- data.frame(
+  Stima    = coef(mod_finale),
+  SE_OLS   = summary(mod_finale)$coefficients[, "Std. Error"],
+  SE_HC3   = sqrt(diag(vcovHC(mod_finale, type = "HC3"))),
+  SE_Boot  = se_boot
+)
+round(confronto_completo, 4)
+```
+
+```{r}
+t_boot <- coef(mod_finale) / se_boot
+p_boot <- 2 * pnorm(abs(t_boot), lower.tail = FALSE)
+round(data.frame(t_value = t_boot, p_value = p_boot), 5)
+```
+
+I tre approcci (OLS classico, HC3, bootstrap) producono standard error dello stesso ordine di grandezza, con un lieve incremento per HC3 e bootstrap rispetto a OLS su quasi tutti i coefficienti, coerente con la presenza di eteroschedasticità. **Tutti i coefficienti restano significativi sotto tutti e tre gli approcci**, incluso Compattezza Relativa, che mostra però il margine di significatività più risicato (p attorno a 0.02, contro p\<2.2e-16 per tutti gli altri predittori) sotto ogni metodo di correzione — coerente con l'instabilità già osservata nel confronto con la regressione robusta. La convergenza tra un metodo analitico (HC3) e uno empirico (bootstrap), basati su logiche statistiche indipendenti, rafforza la fiducia nella validità delle conclusioni inferenziali del modello, nonostante la violazione di omoschedasticità.
+
+```{r}
+#| fig-width: 6
+#| fig-height: 5
+hist(boot_risultati$t[, 2], breaks = 40, col = "lightgrey",
+     main = "Distribuzione bootstrap: CompattezzaRelativa", xlab = "Stima del coefficiente")
+abline(v = coef(mod_finale)["CompattezzaRelativa"], col = "red", lwd = 2)
+```
+
+La distribuzione bootstrap del coefficiente di Compattezza Relativa è ragionevolmente simmetrica e centrata sulla stima puntuale OLS, senza segnali di asimmetria marcata che farebbero dubitare della validità dell'approssimazione.
+
+# Stabilità strutturale del modello: test di Chow
+
+Il test RESET ha segnalato una possibile componente di non linearità non catturata dalla specificazione additiva del modello finale. Altezza Complessiva, la variabile con l'associazione più forte con la risposta, assume esclusivamente due valori: questa è una condizione ideale per applicare il test di Chow, verificando se la relazione tra gli altri predittori e il carico di riscaldamento sia la stessa per edifici bassi (3.5 m) e alti (7 m), oppure se richieda una specificazione differente nei due sottogruppi.
+
+```{r}
+dati_bassi <- dati[dati$AltezzaComplessiva == 3.5, ]
+dati_alti  <- dati[dati$AltezzaComplessiva == 7, ]
+
+mod_bassi <- lm(logCaricoRiscaldamento ~ CompattezzaRelativa + SuperficiePareti +
+                 AreaVetrata + DistribAreaVetrata, data = dati_bassi)
+mod_alti  <- lm(logCaricoRiscaldamento ~ CompattezzaRelativa + SuperficiePareti +
+                 AreaVetrata + DistribAreaVetrata, data = dati_alti)
+
+RSS1 <- sum(residuals(mod_bassi)^2)
+RSS2 <- sum(residuals(mod_alti)^2)
+RSS_non_vincolata <- RSS1 + RSS2
+
+mod_vincolato <- lm(logCaricoRiscaldamento ~ CompattezzaRelativa + SuperficiePareti +
+                     AreaVetrata + DistribAreaVetrata, data = dati)
+RSS0 <- sum(residuals(mod_vincolato)^2)
+
+k <- length(coef(mod_bassi))
+n1 <- nrow(dati_bassi); n2 <- nrow(dati_alti); n <- n1 + n2
+
+F_chow <- ((RSS0 - RSS_non_vincolata) / k) / (RSS_non_vincolata / (n - 2*k))
+p_chow <- pf(F_chow, k, n - 2*k, lower.tail = FALSE)
+
+cat("Statistica F di Chow:", round(F_chow, 3), "\n")
+cat("Gradi di liberta':", k, "e", n - 2*k, "\n")
+cat("p-value:", format.pval(p_chow, digits = 3), "\n")
+```
+
+```{r}
+round(data.frame(Altezza_3.5 = coef(mod_bassi), Altezza_7 = coef(mod_alti)), 4)
+```
+
+Il test rigetta nettamente l'ipotesi di stabilità dei coefficienti (F = 166.13, p \< 2.2e-16): la relazione tra i predittori e il carico di riscaldamento **non è la stessa** per edifici bassi e alti. Il caso più eclatante è ancora una volta Compattezza Relativa, il cui coefficiente non solo cambia intensità ma **inverte segno** tra i due gruppi (0.937 per gli edifici bassi, -0.271 per quelli alti). Gli altri predittori restano concordi in segno ma mostrano un'intensità sistematicamente maggiore nel gruppo degli edifici bassi.
+
+Prima di concludere che si tratti di una vera interazione strutturale, è necessario verificare se l'instabilità di Compattezza Relativa sia genuina oppure un artefatto di collinearità *interna* a ciascun sottogruppo, amplificata dal dimezzamento del campione.
+
+```{r}
+vif(mod_bassi)
+vif(mod_alti)
+```
+
+Questo controllo rivela un risultato importante: nel sottogruppo degli edifici bassi, Compattezza Relativa e Superficie Pareti presentano un VIF di 190, un valore enorme, mentre nel sottogruppo degli edifici alti lo stesso VIF scende a 2.3. La causa si individua immediatamente calcolando la correlazione tra le due variabili separatamente nei due sottogruppi.
+
+```{r}
+cat("Correlazione CompattezzaRelativa-SuperficiePareti, edifici bassi:",
+    round(cor(dati_bassi$CompattezzaRelativa, dati_bassi$SuperficiePareti), 4), "\n")
+cat("Correlazione CompattezzaRelativa-SuperficiePareti, edifici alti:",
+    round(cor(dati_alti$CompattezzaRelativa, dati_alti$SuperficiePareti), 4), "\n")
+cat("Correlazione globale (senza condizionare su Altezza):",
+    round(cor(dati$CompattezzaRelativa, dati$SuperficiePareti), 4), "\n")
+```
+
+Il risultato è sorprendente e istruttivo: a livello globale Compattezza Relativa e Superficie Pareti sono debolmente correlate (-0.20), ma **condizionando su Altezza Complessiva = 3.5 m la correlazione sale a -0.997**, praticamente collinearità perfetta, mentre nel gruppo degli edifici alti resta più moderata (-0.75). Questo è l'esatto meccanismo inverso di quanto osservato altrove nell'analisi: qui è la variabile di raggruppamento (Altezza Complessiva) a **generare** collinearità severa tra due predittori che a livello aggregato non sarebbero fortemente collineari. L'inversione di segno di Compattezza Relativa osservata nel test di Chow non può quindi essere interpretata come una prova netta di una vera interazione fisica tra altezza e compattezza: è almeno in parte, se non prevalentemente, un artefatto della collinearità severa che emerge esclusivamente all'interno del sottogruppo degli edifici bassi. Si tratta di una distinzione concettuale importante: il test di Chow rileva correttamente che *qualcosa* cambia tra i due gruppi, ma prima di attribuire questo cambiamento a una relazione fisica reale è necessario escludere che sia un artefatto statistico della specificazione, esattamente come richiesto da un'interpretazione rigorosa della diagnostica.
+
+**Conclusione su questa sezione**: il test di Chow segnala un'evidente instabilità strutturale del modello rispetto ad Altezza Complessiva, ma l'origine di questa instabilità è riconducibile, almeno in parte, a un problema di collinearità locale all'interno del sottogruppo degli edifici bassi, piuttosto che a un'autentica modificazione dell'effetto fisico delle altre variabili. Un'estensione naturale, che si menziona come sviluppo futuro senza essere sviluppata in questa sede per non appesantire ulteriormente un modello già discusso in ogni sua componente, sarebbe la stima di un modello con interazioni esplicite tra Altezza Complessiva e i predittori restanti, verificando se la significatività di tali interazioni regga anche una volta corretta la collinearità interna ai sottogruppi (ad esempio rimuovendo Superficie Pareti dal sottomodello degli edifici bassi).
+
+# Capacità predittiva del modello: K-fold Cross-Validation
+
+Le sezioni precedenti hanno verificato, con le dovute cautele, la validità delle assunzioni necessarie per un'inferenza affidabile sui coefficienti. Resta una domanda distinta: quanto bene il modello prevede il carico di riscaldamento di edifici non utilizzati per la sua stima. Si utilizza una 10-fold cross-validation: a ogni iterazione nove blocchi vengono usati per ristimare il modello, il blocco restante per calcolare l'errore di previsione, ripetendo la procedura dieci volte in modo che ogni osservazione funga da test set esattamente una volta.
+
+```{r}
+K <- 10
+set.seed(123)
+cv.dati <- crossv_kfold(dati, k = K)
+
+cv.err <- matrix(nrow = K, ncol = 1)
+colnames(cv.err) <- "MSE"
+
+for (k in 1:K) {
+  train_k <- as.data.frame(cv.dati$train[[k]])
+  test_k  <- as.data.frame(cv.dati$test[[k]])
+
+  fit_k <- lm(logCaricoRiscaldamento ~ CompattezzaRelativa + SuperficiePareti +
+              AltezzaComplessiva + AreaVetrata + DistribAreaVetrata, data = train_k)
+  pred_k <- predict(fit_k, newdata = test_k)
+  cv.err[k, "MSE"] <- mean((pred_k - test_k$logCaricoRiscaldamento)^2)
+}
+
+cv.err
+colMeans(cv.err)
+```
+
+```{r}
+mse_in_sample <- mean(residuals(mod_finale)^2)
+cat("MSE in-sample:", round(mse_in_sample, 5), " RMSE in-sample:", round(sqrt(mse_in_sample), 5), "\n")
+cat("MSE cross-validation:", round(colMeans(cv.err), 5), " RMSE cross-validation:",
+    round(sqrt(colMeans(cv.err)), 5), "\n")
+```
+
+L'MSE in-sample (0.01027) e quello di cross-validation (0.01060) sono molto vicini tra loro, con una differenza relativa di circa il 3%; in termini di RMSE, 0.1013 contro 0.1029. Questa vicinanza indica che il modello **non soffre di overfitting**: l'errore che commette su edifici mai visti durante la stima è paragonabile a quello commesso sui dati con cui è stato costruito, e mantiene quindi una capacità predittiva stabile anche fuori campione.
+
+# Conclusioni
+
+L'analisi ha permesso di costruire un modello di regressione lineare multipla per il carico di riscaldamento degli edifici, seguendo un percorso metodologico in cui ogni scelta di specificazione è stata motivata da una verifica esplicita, piuttosto che assunta a priori.
+
+L'orientamento cardinale è stato escluso sulla base di un test ANOVA condotto preliminarmente, la cui robustezza alla violazione di normalità riscontrata è stata argomentata sulla base del disegno bilanciato, dell'omogeneità delle varianze e della numerosità campionaria. La superficie totale è stata rimossa sulla base di una diagnosi formale di multicollinearità (VIF), verificando che la perdita di capacità esplicativa fosse trascurabile. Il modello finale, composto da Compattezza Relativa, Superficie Pareti, Altezza Complessiva, Area Vetrata e Distribuzione dell'Area Vetrata, presenta tutti i coefficienti significativi, confermati sotto tre approcci inferenziali distinti (OLS classico, standard error robusti HC3, bootstrap) nonostante la persistenza di eteroschedasticità residua, la cui origine è stata ricondotta alla natura discreta e multimodale della variabile risposta piuttosto che a un problema risolvibile tramite ulteriori trasformazioni o rimozione di osservazioni influenti, come confermato dall'assenza di punti con distanza di Cook rilevante.
+
+Il test di Chow ha rivelato un'importante instabilità strutturale del modello rispetto ad Altezza Complessiva, la cui origine è stata a sua volta indagata piuttosto che accettata acriticamente, rivelando una collinearità locale severa tra Compattezza Relativa e Superficie Pareti all'interno del sottogruppo degli edifici bassi — un esempio di come una relazione debole a livello aggregato possa diventare quasi deterministica una volta condizionata su un'altra variabile del disegno sperimentale. Questo risultato invita a interpretare con cautela l'inversione di segno di Compattezza Relativa come prova di una reale interazione fisica, senza per questo invalidare la scelta di specificazione additiva adottata nel modello finale, la cui capacità predittiva è stata infine confermata tramite cross-validation, con un errore fuori campione sostanzialmente identico a quello osservato in fase di stima.

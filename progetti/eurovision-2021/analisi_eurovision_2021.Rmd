@@ -1,0 +1,951 @@
+---
+title: 'Analisi Multilivello dell''Eurovision 2021: Network Science e Text Mining'
+author: "Lorenza Cecere"
+output:
+  html_document:
+    theme: cosmo
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    highlight: tango
+    number_sections: true
+  pdf_document:
+    toc: true
+    toc_depth: '3'
+subtitle: Studio Strutturale del Televoto e Mappatura Concettuale dei Testi Musicali
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  fig.align = 'center',
+  fig.width = 10,
+  fig.height = 8
+)
+```
+
+# INTRODUZIONE E OBIETTIVI DELLO STUDIO
+
+Il presente lavoro si propone di analizzare l'edizione dell'**Eurovision Song Contest 2021** attraverso un duplice approccio computazionale radicato nelle scienze dei dati sociali:
+
+1. **Network Science:** Studio del grafo dei flussi di voto del televoto pubblico per mappare alleanze geopolitiche, centralità nazionali e la tendenza intrinseca del network a frammentarsi in macro-comunità.
+
+2. **Text Mining:** Sentiment Analysis dei testi delle tre finaliste (tradotti uniformemente in inglese) per estrarre e visualizzare graficamente la mappa concettuale dei temi universali trattati dagli artisti. Al fine di esaminare le relazioni di associazione tra gli artisti e i profili emotivi, è stata applicata un'Analisi delle Corrispondenze.
+
+---
+
+# PARTE I: NETWORK SCIENCE: L'ANALISI DEL TELEVOTO
+
+
+```{r libraries, include=FALSE}
+library(igraph)
+library(dplyr)
+library(gt)
+library(ggplot2)
+library(proxy)
+library(tm)
+```
+
+## Caricamento dei Dataset e Data Pre-Processing
+
+I dati grezzi documentano ogni singola transazione di voto dal 1957 al 2021. Al fine di preservare la significatività statistica e la sincronia temporale, isoliamo l'anno **2021**, estraendo esclusivamente la matrice del **Televoto** (voto espresso dal pubblico sovrano), escludendo le giurie tecniche per far emergere i legami socio-culturali puri tra le popolazioni. 
+
+```{r data_loading, include=FALSE}
+
+# Caricamento dei file
+eurovision_raw <- read.csv("eurovision_1957-2021.csv", stringsAsFactors = FALSE)
+# countries_map  <- read.csv("Countries.csv", stringsAsFactors = FALSE)  # non utilizzato nel resto dell'analisi
+
+# Filtraggio e isolamento dell'Edge List pura
+eurovision_2021 <- eurovision_raw |> 
+  filter(Year == 2021) |> 
+  filter(Points.type == "Points given by televoters") |> 
+  filter(Points > 0) |>                            # Esclusione dei legami nulli
+  select(From, To, Points)                        
+
+```
+
+## Costruzione della Rete e Misure Globali
+
+Un grafo è definito dalla coppia $G = (V, E)$, dove $V$ rappresenta l'insieme dei nodi (le nazioni) ed $E$ l'insieme degli archi (i flussi di punteggio). Poiché il voto si muove da una nazione ad un'altra, la nostra rete è **direzionata e pesata** ($w_{ij} \in \{1..12\}$).
+
+* **Densità ($\delta$):** Rapporto tra archi presenti e archi potenziali. Misura il livello di saturazione relazionale del sistema.
+* **Diametro ($D$):** La massima distanza geodetica (il cammino minimo più lungo) tra qualsiasi coppia di nodi. Indica l'estensione dello spazio di rete.
+* **Average Path Length:** La media dei cammini minimi tra tutti i nodi, indicatore dell'efficienza di propagazione dei flussi all'interno della rete.
+* **Transitività (Clustering Coefficient Globale):** Misura la frazione di triadi chiuse.
+
+```{r global_network, include=FALSE}
+# Creazione del grafo direzionato
+g_2021 <- graph_from_data_frame(d = eurovision_2021, directed = TRUE)
+
+# Calcolo delle macro-metriche
+num_nodi  <- vcount(g_2021)
+num_archi <- ecount(g_2021)
+den_grafo <- edge_density(g_2021) #rapporto tra gli archi effettivamente presenti nel grafo e il numero massimo di archi possibili se tutti votassero tutti
+comp_connesse <- components(g_2021)$no #estraiamo il numero di componenti isolate. Restituisce 1. Il grafo è interamente connesso 
+```
+
+Generiamo ora una tabella sintetica utilizzando la libreria `gt` per documentare l'anatomia del grafo.
+
+```{r global_table, echo=FALSE}
+df_globali <- data.frame(
+  Metrica = c("Stati Partecipanti (Nodi)", "Voti (Archi)", "Densità del Network", 
+              "Grado Medio (Connessioni)", "Diametro Strutturale", "Shortest Path Medio", 
+              "Transitività Globale (Clustering)", "Accentramento (In-Degree Centralization)"),
+
+  Valore = c(vcount(g_2021), 
+             ecount(g_2021), 
+             edge_density(g_2021), 
+             mean(degree(g_2021, mode = "all")), 
+             diameter(g_2021, directed = TRUE, weights = NA), 
+             mean_distance(g_2021, directed = TRUE), 
+             transitivity(g_2021, type = "global"), 
+             centr_degree(g_2021, mode = "in")$centralization),
+  Significato = c("Nazioni attive nel calcolo del televoto", "Legami di punteggio effettivi (> 0)", 
+                  "Percentuale di legami esistenti rispetto ai legami potenziali", "Voti medi ricevuti per singolo Stato", 
+                  "Massima distanza geodetica per collegare due Stati nella rete", "Numero medio di archi che separano una coppia di Stati", 
+                  "Propensione intrinseca a creare clique o blocchi regionali", "Livello di polarizzazione dei voti sui Paesi vincitori")
+)
+
+df_globali |> 
+  gt() |> 
+  tab_header(title = md("**ANATOMIA STRUTTURALE DEL NETWORK GLOBALE**")) |> 
+  
+fmt_number(columns = Valore, decimals = 2, dec_mark = ",") |>  
+  
+cols_align(align = "left", columns = c(Metrica, Significato)) |> 
+cols_align(align = "center", columns = Valore) |> 
+tab_options(
+    heading.background.color = "#1e1e2f",
+    column_labels.background.color = "#2d2d44",
+    row.striping.include_table_body = TRUE
+  ) |> 
+tab_style(style = cell_text(color = "#ff007f", weight = "bold"), locations = cells_title(groups = "title")) |> 
+tab_style(style = cell_text(color = "#ffffff", weight = "bold"), locations = cells_column_labels())
+```
+
+
+## Misure di Centralità Locale
+
+Mentre le misure globali descrivono il sistema nel suo complesso, le misure di centralità ne identificano i nodi strategici, catturando diverse sfumature del concetto di "potere" e "influenza":
+
+1.  **In-Degree Centrality ($C_D^{in}(i)$):** Il numero di archi entranti in un nodo. Nel nostro contesto simboleggia l'attrattività e il successo di mercato della proposta musicale, ovvero la *popolarità immediata*.
+2.  **Out-Degree Centrality ($C_D^{out}(i)$):** Il numero di archi uscenti. All'Eurovision ogni paese esprime un numero fisso di preferenze, dunque l'out-degree riflette l'attività regolamentata di voto.
+3.  **Closeness Centrality ($C_C(i)$):** Il reciproco della somma delle distanze minime da tutti gli altri nodi:
+    $$C_C(i) = \frac{1}{\sum_{j} d(i,j)}$$
+    In una rete di voto esprime la capacità di un nodo di essere strutturalmente "vicino" a tutti i flussi transnazionali, agendo da recettore rapido dei consensi.
+4.  **Betweenness Centrality ($C_B(i)$):** La frequenza con cui un nodo si trova sui cammini minimi che collegano tutte le coppie di altri nodi della rete:
+    $$C_B(i) = \sum_{s \neq i \neq t} \frac{\sigma_{st}(i)}{\sigma_{st}}$$
+    Rappresenta il concetto sociologico di **"intermediario"**. Un nodo con alta betweenness agisce come un ponte tra sotto-componenti o cluster regionali isolati. 
+
+```{r text_cleaning_function, include = FALSE}
+prima_maiuscola <- function(stringa) {
+  s <- gsub("-", " ", stringa)
+  s <- tools::toTitleCase(s)
+  
+  # Usa i confini di parola (\\b) per isolare solo il Regno Unito e non confondersi con Ukraine
+  s <- gsub("\\bUk\\b", "UK", s)
+  
+  return(s)
+}
+
+V(g_2021)$name <- prima_maiuscola(V(g_2021)$name)
+```
+
+Eseguiamo ora il calcolo delle metriche su base locale ed estraiamo la **Top 10** dei paesi dominanti secondo il televoto del 2021.
+
+```{r local_centrality, echo = FALSE}
+df_locali <- data.frame(
+  Stato = V(g_2021)$name,
+  In_Degree   = degree(g_2021, mode = "in"),
+  Out_Degree  = degree(g_2021, mode = "out"),
+  Closeness   = closeness(g_2021, mode = "in", weights = NA), 
+  Betweenness = betweenness(g_2021, directed = TRUE, weights = NA)
+) |>  arrange(desc(In_Degree))
+
+# Tabella Top 10 
+df_locali |> 
+  slice(1:10) |>  
+  gt() |> 
+  tab_header(
+    title = md("**TOP 10 NAZIONI - RANKING DI CENTRALITÀ LOCALE**")) |> 
+  cols_label(
+    In_Degree = "In-Degree",
+    Out_Degree = "Out-Degree",
+    Closeness = "Closeness",
+    Betweenness = "Betweenness"
+  ) |> 
+  fmt_number(columns = c(Closeness, Betweenness), decimals = 4) |> 
+  tab_options(
+    heading.background.color = "#0f172a", 
+    column_labels.background.color = "#1e293b",
+    data_row.padding = px(8)
+  ) |> 
+  tab_style(style = cell_text(color = "#00f0ff", weight = "bold"), locations = cells_title(groups = "title")) |> 
+  tab_style(style = cell_text(color = "#ffffff", weight = "bold"), locations = cells_column_labels())
+```
+
+L'analisi dei parametri locali rivela dinamiche strutturali e geopolitiche di estremo interesse. In primo luogo, il valore di Out-Degree costantemente pari a 10 per tutti i paesi riflette un vincolo regolamentare istituzionale dell'Eurovision (l'obbligo di assegnare punti - da 1 a 12 - a una specifica top 10), configurando la rete, dal punto di vista della Network Science, con una proprietà di out-degree regolare. Analizzando il blocco di testa composto da Finlandia, Ucraina, Francia e Italia, si nota come queste quattro nazioni condividano lo stesso identico valore di In-Degree (24) e di Closeness Centrality (0.0417), indicando il medesimo livello di popolarità assoluta e di efficacia nel ricevere preferenze. Tuttavia, il vero elemento discriminante emerge dall'analisi della Betweenness Centrality, dove l'Italia svetta drammaticamente sopra gli altri sfidanti con un punteggio di 50.8113, a fronte del 17.5158 della Finlandia e del 28.6960 dell'Ucraina. In termini geopolitici e sociologici, questa firma topologica dimostra che i voti ottenuti dall'Italia non sono rimasti circoscritti a un blocco geografico isolato o a storiche alleanze regionali (come i blocchi dell'Est o del Nord Europa), ma si sono distribuiti in modo estremamente eterogeneo e trasversale nell'intera rete, posizionando l'Italia come il vero core-node. 
+
+
+### Visualizzazione del Neighbourhood con Lollipop Chart
+
+Per comprendere analiticamente da quali vettori geografici è dipesa la vittoria dell'Italia nel 2021 (i Måneskin), isoliamo il suo **In-Neighborhood** (il vicinato d'entrata), ovvero l'insieme delle nazioni che hanno indirizzato un arco verso il nodo "Italy", pesando il legame con l'intensità del punteggio effettivo assegnato.
+
+```{r lollipop_plot, fig.width=9, fig.height=7, echo=FALSE}
+# Estrazione degli archi che puntano a "Italy"
+vicinato_italia <- eurovision_2021 |> 
+  mutate(From = prima_maiuscola(From), To = prima_maiuscola(To)) |> 
+  filter(To == "Italy") |> 
+  arrange(desc(Points))
+
+# Grafico a "Lollipop" per visualizzare la distribuzione del consenso
+ggplot(vicinato_italia, aes(x = reorder(From, Points), y = Points)) +
+  geom_segment(aes(xend = From, yend = 0), color = "#cbd5e1", size = 1.2) +
+  geom_point(color = "#ff007f", size = 4) +
+  geom_text(aes(label = Points), hjust = -0.5, size = 3.5, fontface = "bold", color = "#1e1e2f") +
+  coord_flip() +
+  labs(
+    title = "Televoto 2021: voti per l'Italia",
+    subtitle = "Vicinato d'entrata (In-Neighborhood) pesato del nodo 'Italy'",
+    x = "Nazione Votante",
+    y = "Punti Assegnati"
+  ) +
+  scale_y_continuous(limits = c(0, 13), breaks = seq(0, 12, 2)) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold", color = "#1e1e2f"),
+    axis.text.y = element_text(face = "bold"),
+    panel.grid.minor = element_blank()
+  )
+```
+
+L'output grafico evidenzia una distribuzione del consenso eccezionalmente solida e stratificata: ben cinque paesi (Ucraina, Serbia, San Marino, Malta e Bulgaria) hanno assegnato all'Italia il punteggio massimo di 12 punti, seguiti da un nucleo massiccio di ben nove nazioni ancorate stabilmente sulla soglia dei 10 punti (tra cui Svizzera, Spagna, Russia e Francia).
+
+Dal punto di vista della Network Science, il grafico non mostra un consenso polarizzato o limitato a cluster regionali isolati, bensì un fenomeno di convergenza trans-europea in cui diverse nazioni dell'Europa centrale concorrono in modo sinergico al peso complessivo del nodo italiano. 
+
+### Edge Betweenness Centrality
+
+Non sono solo i nodi a possedere un valore di centralità. La **Edge Betweenness Centrality** è una metrica della teoria delle reti che misura l'importanza di un arco in base a quanti cammini minimi (shortest path) tra tutte le coppie di nodi lo attraversano.
+
+```{r edge_betweenness, echo=FALSE}
+archi_betweenness <- edge_betweenness(g_2021, directed = TRUE, weights = NA)
+
+df_archi <- data.frame(
+  Da = ends(g_2021, E(g_2021))[,1],
+  A  = ends(g_2021, E(g_2021))[,2],
+  Edge_Betweenness = archi_betweenness
+) |>  arrange(desc(Edge_Betweenness))
+
+# Rappresentazione della top 5
+head(df_archi, 5) |> 
+  rename(`Stato Votante` = Da, `Stato Votato` = A, `Valore Edge Betweenness` = Edge_Betweenness) |> 
+  gt() |> 
+  tab_header(
+    title = md("**CRITICAL BRIDGES: TOP 5 EDGE BETWEENNESS**")) |> 
+  fmt_number(columns = `Valore Edge Betweenness`, decimals = 2) |> 
+  tab_options(
+    heading.background.color = "#ff007f", 
+    column_labels.background.color = "#1e293b",
+    data_row.padding = px(10)
+  ) |> 
+  tab_style(style = cell_text(color = "#ffffff", weight = "bold"), locations = cells_title(groups = "title")) |> 
+  tab_style(style = cell_text(color = "#ffffff", weight = "bold"), locations = cells_column_labels())
+```
+
+I risultati emersi dalla Top 5 Edge Betweenness dell'edizione 2021 evidenziano la spina dorsale geopolitica della manifestazione. Il legame Russia $\rightarrow$ Cyprus (25.00) si configura come l'arteria più trafficata dell'intero grafo, formalizzando il principale canale di comunicazione e convergenza culturale tra l'area post-sovietica e il bacino del Mediterraneo orientale. Di fondamentale rilievo è la duplice presenza dell'Italia nei primi tre vettori d'istanza, attraverso i legami diretti verso San Marino (20.00) e Albania (19.77). Questo dato dimostra che le preferenze espresse dall'Italia nel 2021 non hanno rappresentato semplici voti isolati o vicoli ciechi topologici; al contrario, agganciandosi a nodi strategici e altamente connessi come il micro-stato sammarinese e l'area balcanica, le scelte dell'Italia hanno funzionato come veri e propri vettori di instradamento culturale. Esse hanno permesso di accorciare le distanze geometriche globali e di connettere l'Europa occidentale con i cluster storici dell'Est e del Sud-Est europeo, confermando come l'equilibrio e l'interconnessione dell'intero festival abbiano gravitato attorno alle scelte relazionali del nodo italiano.
+
+## Community Detection
+
+La ricerca di sottostrutture di comunità (clustering) risponde all'esigenza di comprendere come i nodi si aggreghino spontaneamente. Mettiamo a confronto quattro approcci teorici differenti della Network Science:
+
+1.  **Algoritmo di Louvain (`cluster_louvain`):** Approccio che punta a massimizzare l'indice di **Modularità ($Q$)**. La modularità misura la frazione di archi interni ai cluster rispetto a una rete generata casualmente:
+    $$Q = \frac{1}{2m} \sum_{ij} \left[ A_{ij} - \frac{k_i k_j}{2m} \right] \delta(c_i, c_j)$$
+    È un algoritmo greedy ultra-rapido, ideale per individuare macro-aggregazioni nette.
+2.  **Algoritmo Walktrap (`cluster_walktrap`):** Si basa sul principio dei **cammini casuali (Random Walks)**. L'assunto teorico è che un camminatore casuale che si muove lungo gli archi della rete tenderà a rimanere intrappolato a lungo all'interno di zone densamente connesse (le comunità), faticando a uscirne a causa della scarsità di ponti esterni.
+3.  **Algoritmo di Girvan-Newman (`cluster_edge_betweenness`):** Approccio divisivo gerarchico (top-down). Calcola ripetutamente la Edge Betweenness, individua l'arco ponte massimo, lo taglia e ricalcola le metriche, procedendo in modo iterativo fino a isolare i nodi. Svela la struttura ad albero (dendrogramma).
+4.  **Label Propagation (`cluster_label_prop`):** Ogni nazione adotta iterativamente la categoria statistica più frequente (la regola della maggioranza) presente nel proprio vicinato relazionale.Questo flusso simula la propagazione di un'influenza culturale o di un comportamento d'opinione all'interno del network.
+
+Al fine di rendere i grafi simmetrici e idonei all'applicazione rigorosa di questi algoritmi, convertiamo la rete in **non-direzionata**, collassando gli archi contrapposti e sommandone i pesi relazionali.
+
+```{r community_preprocessing, include=FALSE}
+# Pulizia nei nomi 
+eurovision_2021_clean <- eurovision_raw |> 
+  filter(Year == 2021) |> 
+  filter(Points.type == "Points given by televoters") |> 
+  filter(Points > 0) |> 
+  mutate(
+    From = tools::toTitleCase(tolower(gsub("-", " ", From))),
+    To = tools::toTitleCase(tolower(gsub("-", " ", To)))
+  ) |> 
+  mutate(From = gsub("Uk", "UK", From), To = gsub("Uk", "UK", To)) |> 
+  select(From, To, Points)
+
+# Generazione dei grafi per il clustering
+g_2021_dir <- graph_from_data_frame(d = eurovision_2021_clean, directed = TRUE)
+g_undirected <- as.undirected(g_2021_dir, mode = "collapse", edge.attr.comb = "sum")
+
+# Esecuzione parallela dei 4 modelli 
+comm_louvain  <- cluster_louvain(g_undirected)
+comm_walktrap <- cluster_walktrap(g_undirected)
+comm_girvan   <- cluster_edge_betweenness(g_undirected, weights = NA)
+comm_label    <- cluster_label_prop(g_undirected)
+```
+
+### Visualizzazione Grafica Comparativa degli Algoritmi
+
+Visualizziamo contemporaneamente le 4 ripartizioni spaziali della rete. 
+
+```{r quadrant_plot, fig.width=11, fig.height=10, echo = FALSE}
+# Configurazione della matrice grafica 2x2
+par(mfrow = c(2, 2), mar = c(0.5, 0.5, 1.8, 0.5))
+
+set.seed(123)
+layout_identico <- layout_with_fr(g_undirected, niter = 1000)
+
+# Parametri estetici unificati
+v_label      <- V(g_undirected)$name
+v_label_cex  <- 0.55
+v_size       <- 6
+e_color      <- "grey90"
+e_width      <- E(g_undirected)$weight * 0.05
+t_cex        <- 1.1
+
+# 1. LOUVAIN
+plot(comm_louvain, g_undirected, layout = layout_identico,
+  vertex.label = v_label, vertex.label.color = "#1e1e2f", vertex.label.font = 2,
+  vertex.label.cex = v_label_cex, vertex.size = v_size, edge.color = e_color, edge.width = e_width,
+  cex.main = t_cex, main = "1. OTTIMIZZAZIONE MODULARITÀ (LOUVAIN)"
+)
+
+# 2. WALKTRAP
+plot(comm_walktrap, g_undirected, layout = layout_identico,
+  vertex.label = v_label, vertex.label.color = "#1e1e2f", vertex.label.font = 2,
+  vertex.label.cex = v_label_cex, vertex.size = v_size, edge.color = e_color, edge.width = e_width,
+  cex.main = t_cex, main = "2. CAMMINI CASUALI (WALKTRAP)"
+)
+
+# 3. GIRVAN-NEWMAN
+plot(comm_girvan, g_undirected, layout = layout_identico,
+  vertex.label = v_label, vertex.label.color = "#1e1e2f", vertex.label.font = 2,
+  vertex.label.cex = v_label_cex, vertex.size = v_size, edge.color = e_color, edge.width = e_width,
+  cex.main = t_cex, main = "3. EDGE BETWEENNESS (GIRVAN-NEWMAN)"
+)
+
+# 4. LABEL PROPAGATION
+plot(comm_label, g_undirected, layout = layout_identico,
+  vertex.label = v_label, vertex.label.color = "#1e1e2f", vertex.label.font = 2,
+  vertex.label.cex = v_label_cex, vertex.size = v_size, edge.color = e_color, edge.width = e_width,
+  cex.main = t_cex, main = "4. DINAMICHE DI CONSENSO (LABEL PROPAGATION)"
+)
+
+
+```
+
+L'analisi combinata di questi modelli permette di testare la robustezza e la stabilità dei blocchi di voto, evidenziando alcune costanti geopolitiche macroscopiche e comportamenti micro-strutturali specifici dei singoli algoritmi:
+
+1. **Ottimizzazione della Modularità (Louvain):** Questo modello evidenzia una netta macro-polarizzazione della rete in due sole grandi macro-comunità. Il cluster rosso intercetta la quasi totalità del *Blocco dell'Est* e dell'*area Balcanica* (tra cui spiccano nodi come Russia, Ucraina, Serbia, Bulgaria, Albania), attraendo a sé anche hub isolati del Mediterraneo orientale come Cipro. Il macro-cluster azzurro aggrega invece l'Europa centro-occidentale, il blocco Scandinavo e i paesi Baltici. 
+2. **Cammini Casuali (Walktrap):** Basandosi sull'assunto che brevi *random walks* tendano a rimanere intrappolati all'interno di zone densamente connesse, l'algoritmo Walktrap raffina la scomposizione di Louvain. Pur confermando l'esistenza del blocco Est-Balcanico, il modello isola in modo estremamente nitido due anomalie topologiche della rete: Grecia e Cipro vengono estratti come comunità separate a nodo singolo o fortemente isolate. Questo fenomeno evidenzia la natura periferica dei due nodi rispetto ai flussi centrali della rete europea. Il blocco scandinavo e occidentale viene qui parzialmente segmentato, evidenziando ad esempio l'autonomia relazionale dei Paesi Bassi.
+3. **Edge Betweenness (Girvan-Newman):** Essendo un algoritmo di tipo gerarchico-divisivo che rimuove progressivamente i ponti critici a più alto traffico relazionale, Girvan-Newman produce la frammentazione più profonda ed elevata del network. Il modello preserva quasi intatto il nucleo storico Est/Balcanico, il che ne attesta l'indistruttibile stabilità relazionale interna. Al contrario, l'Europa occidentale viene polverizzata in una moltitudine di micro-comunità e nodi isolati. Ciò dimostra che il voto dell'Europa occidentale è topologicamente più fluido, meno polarizzato ed estremamente sensibile al taglio dei ponti di collegamento intermedi.
+4. **Dinamiche di Consenso (Label Propagation):** L'algoritmo collassa l'intera rete in un'unica, immensa macro-comunità globale, ad eccezione del nodo isolato della Grecia. Questo risultato, apparentemente controintuitivo, offre un'informazione strutturale fondamentale: dimostra che la rete del televoto dell'Eurovision 2021 non è scissa in fazioni nemiche o strutturalmente impermeabili. Esiste un livello di interconnessione, di scambio e di convergenza culturale così pervasivo e diffuso (guidato dai flussi trasversali generati dalle canzoni dominanti come quella italiana) che, se lasciata auto-organizzare per effetto trascinamento, la quasi totalità della rete converge spontaneamente verso un unico consenso globale.
+
+```{r}
+#| echo: false
+# Reset ambiente grafico
+par(mfrow = c(1, 1))
+```
+
+
+### Grafico di Sovrapposizione Diretta
+
+Per evidenziare i punti esatti di disaccordo tra i due modelli dominanti, generiamo un grafo integrato in cui **il colore interno del nodo mappa Louvain**, mentre **il colore del bordo esterno mappa Walktrap**. Se un nodo presenta un bordo di colore differente rispetto al nucleo interno, significa che i due algoritmi lo hanno assegnato a due cluster geopolitici diversi.
+
+```{r overlapping_graph, fig.width=10, fig.height=9, echo=FALSE}
+colori_cluster <- c("#ff007f", "#00f0ff", "#7000ff", "#ffaa00", "#10b981")
+
+colori_interno <- colori_cluster[comm_louvain$membership]
+colori_bordo   <- colori_cluster[comm_walktrap$membership]
+
+par(mar = c(0.5, 0.5, 2, 0.5))
+plot(g_undirected, layout = layout_identico,
+  vertex.color = colori_interno,         # LOUVAIN
+  vertex.frame.color = colori_bordo,     # WALKTRAP
+  vertex.frame.width = 3,                
+  vertex.label = V(g_undirected)$name,
+  vertex.label.color = "#1e293b", vertex.label.font = 2, vertex.label.cex = 0.65, vertex.label.dist = 0.7,
+  vertex.size = 7.5, edge.arrow.size = 0, edge.color = "grey85", edge.width = E(g_undirected)$weight * 0.08,
+  main = "Mappa di Sovrapposizione: Louvain (Interno) vs Walktrap (Bordo)"
+)
+```
+
+
+### Analisi Comparativa delle Performance di Modularità ($Q$)
+
+```{r modularity_comparison, echo=FALSE}
+df_modularita <- data.frame(
+  Algoritmo = c("Louvain", "Walktrap", "Girvan-Newman", "Label Propagation"),
+  Numero_Community = c(length(comm_louvain), length(comm_walktrap), length(comm_girvan), length(comm_label)),
+  Modularita = c(modularity(comm_louvain), modularity(comm_walktrap), modularity(comm_girvan), modularity(comm_label))
+)
+
+ggplot(df_modularita, aes(x = reorder(Algoritmo, Modularita), y = Modularita, fill = Algoritmo)) +
+  geom_bar(stat = "identity", width = 0.5, alpha = 0.9, show.legend = FALSE) +
+  geom_text(aes(label = round(Modularita, 4)), vjust = -0.5, fontface = "bold", size = 4) +
+  scale_fill_manual(values = c("#ff007f", "#00f0ff", "#7000ff", "#ffaa00")) +
+  labs(
+    title = "Efficienza del Taglio della Rete: Indice di Modularità (Q)",
+    subtitle = "Valori di Q più alti indicano partizioni strutturalmente più nette ed eccellenti",
+    x = "Modello Algoritmico",
+    y = "Punteggio di Modularità (Q)"
+  ) +
+  theme_minimal(base_size = 12)
+```
+In conclusione, i dati sulla modularità legittimano la scelta metodologica di adottare il modello di **Louvain** come principale chiave di lettura strutturale per il report: la sua scomposizione è l'unica in grado di dimostrare matematicamente l'esistenza di barriere geopolitiche nette e polarizzate nel flusso del consenso dell'Eurovision 2021.
+
+## Metriche di Confronto e Distanza tra Partizioni
+
+Per misurare rigorosamente se due algoritmi hanno generato lo stesso raggruppamento o se sussistono discrepanze macroscopiche, la Network Science si avvale di indici di informazione e distanza:
+
+* **NMI (Normalized Mutual Information):** Misura l'informazione condivisa tra le partizioni. Varia tra $0$ (indipendenza totale dei cluster) e $1$ (accordo perfetto delle appartenenze).
+* **ARI (Adjusted Rand Index):** Calcola la frazione di coppie di nodi inserite nello stesso cluster in entrambe le configurazioni, normalizzata rispetto al caso casuale. $1$ indica identità assoluta.
+* **VI (Variation of Information):** Una vera e propria metrica di distanza basata sull'entropia d'informazione:
+    $$VI(X,Y) = H(X) + H(Y) - 2I(X,Y)$$
+    Misura quanta informazione si perde o si guadagna passando da una partizione all'altra. Valori vicini a $0$ indicano estrema stabilità strutturale.
+* **Split-Join Distance:** Conta il numero minimo di nodi che devono essere spostati da una comunità all'altra per rendere le due partizioni perfettamente identiche.
+
+Eseguiamo il confronto analitico focalizzandoci sui due modelli cardine: **Louvain** vs **Walktrap**.
+
+```{r partition_distance, echo=FALSE}
+part_A <- comm_louvain$membership
+part_B <- comm_walktrap$membership
+
+# Calcolo analitico degli indici bilaterali
+nmi_val        <- compare(part_A, part_B, method = "nmi")
+ari_val        <- compare(part_A, part_B, method = "rand")
+vi_val         <- compare(part_A, part_B, method = "vi")
+split_join_val <- split_join_distance(comm_louvain, comm_walktrap)
+
+
+df_confronto <- data.frame(
+  Indice_Confronto = c("Normalized Mutual Information", 
+                       "Adjusted Rand Index", 
+                       "Variation of Information", 
+                       "Split-Join Distance"),
+  Valore = c(nmi_val, 
+             ari_val, 
+             vi_val, 
+             split_join_val[1] + split_join_val[2]),
+  Interpretazione_Metrica = c(
+    "Grado di informazione condivisa: indica che i modelli estraggono i medesimi macro-blocchi relazionali.",
+    "Percentuale di accordo nell'accoppiamento dei nodi: attesta una stabilità delle alleanze geopolitiche pari al 76%.",
+    "Un valore contenuto che esclude variazioni caotiche tra i due algoritmi.",
+    "In tutta la rete dell'Eurovision basterebbe spostare o riassegnare solo 7 stati per rendere la mappa di Louvain e quella di Walktrap identiche al 100%."
+  )
+)
+
+# Generazione della tabella istituzionale tramite gt
+df_confronto |> 
+  gt() |> 
+  tab_header(
+    title = md("**PROFILO DI DISTANZA E SIMILARITÀ TRA LE PARTIZIONI**"), 
+    subtitle = md("*Modello Louvain vs Modello Walktrap*")
+  ) |> 
+  # Forza i decimali a 4 cifre solo per le prime 3 righe (le metriche continue)
+  fmt_number(columns = Valore, rows = 1:3, decimals = 4) |> 
+  # Lascia il numero intero puro (7) per l'ultima riga della distanza
+  fmt_number(columns = Valore, rows = 4, decimals = 0) |> 
+  cols_align(align = "left", columns = c(Indice_Confronto, Interpretazione_Metrica)) |> 
+  cols_align(align = "center", columns = Valore) |> 
+  cols_label(
+    Indice_Confronto = "Indice di Confronto Bilaterale",
+    Valore = "Valore Calcolato",
+    Interpretazione_Metrica = "Significato Analitico nel Network"
+  ) |> 
+  tab_options(
+    heading.background.color = "#0369a1", 
+    column_labels.background.color = "#0c4a6e",
+    row.striping.include_table_body = TRUE
+  ) |> 
+  tab_style(style = cell_text(color = "#38bdf8", weight = "bold"), locations = cells_title(groups = "title")) |> 
+  tab_style(style = cell_text(color = "#ffffff", weight = "bold"), locations = cells_column_labels())
+```
+
+
+##  Ego Network dell'Italia
+
+```{r, include= FALSE}
+
+# 1. Pulizia rigorosa del dataset originale per evitare doppio San Marino
+eurovision_pulito <- eurovision_2021 |> 
+  mutate(
+    From = trimws(prima_maiuscola(From)),
+    To   = trimws(prima_maiuscola(To))
+  )
+
+# 2. Ricostruzione del grafo generale senza nodi ridondanti
+g_2021_clean <- graph_from_data_frame(
+  d = eurovision_pulito, 
+  directed = TRUE
+)
+```
+
+
+```{r ego_network, echo=FALSE}
+
+ego_italy <- make_ego_graph(g_2021_clean, order = 1, nodes = "Italy", mode = "all")[[1]]
+
+
+V(ego_italy)$color <- ifelse(V(ego_italy)$name == "Italy", "pink", "#ffff88")
+V(ego_italy)$size  <- ifelse(V(ego_italy)$name == "Italy", 22, 9)
+
+
+set.seed(42) 
+plot(
+  ego_italy,
+  vertex.label = V(ego_italy)$name,
+  vertex.label.color = "#1e1e2f",
+  vertex.label.font = 2,
+  vertex.label.cex = 0.8,
+  vertex.label.dist = 1.6,
+  edge.arrow.size = 0.3,
+  edge.color = "#cbd5e1",
+  main = "Ego-Network dell'Italia (Televoto 2021)"
+)
+```
+
+L'Ego-Network mostra la coesistenza pacifica e la convergenza ravviciata di nazioni storicamente divise nei blocchi di voto tradizionali dell'Eurovision. Troviamo infatti legati allo stesso nodo centrale sia i paesi del blocco post-sovietico (Russia, Ucraina, Azerbaigian, Moldavia) e dell'estrazione balcanica (Serbia, Bulgaria, Albania, Grecia), sia i membri storici del blocco occidentale e scandinavo (Francia, Spagna, Svizzera, Paesi Bassi, Svezia, Islanda, Belgio).
+
+## Rete Multilayer
+
+Per comprendere appieno l'evoluzione temporale dei flussi di voto, l'analisi è stata estesa a una struttura di Network Multilayer (Rete Multistrato). A differenza di una rete classica (monolayer), una rete multilayer permette di mappare le relazioni tra le entità tenendo conto di diversi contesti, canali o, come in questo caso specifico, archi temporali distinti (gli anni delle edizioni).
+
+1. I Nodi nella Rete Multilayer
+Nelle reti multistrato è fondamentale distinguere tra l'entità fisica/astratta in sé e la sua rappresentazione all'interno di un determinato strato:
+
+* **Entità (o Attori*)**: Rappresentano gli Stati partecipanti (es. Italia, Francia, Ucraina). Il set di attori rimane globalmente lo stesso o varia leggermente tra le edizioni.
+
+* **Nodi di Layer (Node-Layer Pairs)**: Un nodo è definito dalla combinazione dell'attore e dello strato in cui si trova (es. Italy 2018, Italy 2019, Italy 2021). Nella visualizzazione grafica, questi nodi compaiono replicati sui tre piani paralleli.
+
+2. Gli Archi (Links) nella Rete Multilayer
+La complessità e la ricchezza della rete multilayer risiedono nella presenza di due macro-tipologie di archi:
+
+* **Archi Intra-layer (Intra-strato)**: Sono i collegamenti che avvengono all'interno dello stesso strato temporale. Nel caso del televoto, rappresentano i flussi di voti scambiati tra le nazioni durante una specifica edizione (es. i voti inviati dall'Albania all'Italia nel 2019). Questi archi sono diretti e pesati in base all'intensità del televoto.
+
+* **Archi Inter-layer (Inter-strato)**: Sono i collegamenti verticali che uniscono strati diversi. Nel modello longitudinale utilizzato (chiamato Multiplex o Rete Temporale), gli archi inter-layer collegano la stessa identica entità con se stessa nel corso del tempo (es. il filo conduttore ideale o la linea tratteggiata che unisce Italy 2018 a Italy 2019 e poi a Italy 2021). Questi archi fungono da "ancore" strutturali e permettono di misurare la stabilità del comportamento di uno Stato nel tempo.
+
+
+3. Misure di Centralità e Metriche nelle Reti Multilayer
+Le classiche metriche di network science vengono riadattate matematicamente per considerare la presenza dei layer:
+
+* **Multilayer Degree (Grado Multistrato)** e In-Degree longitudinale: Mentre in una rete classica l'In-Degree indica quanti voti riceve un paese in un anno, l'In-Degree Multistrato può calcolare la centralità complessiva di un paese sommando i voti ricevuti attraverso tutti i layer (il grado aggregato), permettendo di identificare i paesi storicamente più forti al televoto.
+
+* **Overlapping Degree (Grado di Sovrapposizione)**: Misura la persistenza dei collegamenti di un nodo. Se l'Italia riceve costantemente voti alti dagli stessi paesi sia nel 2018, sia nel 2019 che nel 2021, l'arco intra-layer si "sovrappone" nei vari strati, indicando la presenza di alleanze geopolitiche o preferenze culturali storiche e non passeggere.
+
+* **Centralità Multilayer**: Valuta l'importanza di uno Stato non solo all'interno di una singola edizione, ma calcolando l'influenza che si propaga attraverso i collegamenti temporali inter-layer. Un paese è centrale se riceve voti da paesi a loro volta centrali storicamente nel sistema Eurovision.
+```{r, echo=FALSE}
+
+library(dplyr)
+library(igraph)
+library(tidygraph)
+library(ggraph)
+
+# 1. SELEZIONE DEGLI ANNI PER I LAYER
+anni_layer <- c(2018, 2019, 2021)
+
+eurovision_multi <- eurovision_raw |> 
+  filter(Year %in% anni_layer) |> 
+  filter(grepl("televot", Points.type, ignore.case = TRUE)) |> 
+  filter(Points > 0) |> 
+  mutate(
+    From = tools::toTitleCase(tolower(gsub("-", " ", From))),
+    To = tools::toTitleCase(tolower(gsub("-", " ", To))),
+    From_Layer = paste(From, Year, sep = "_"),
+    To_Layer = paste(To, Year, sep = "_")
+  )
+
+# 2. CREAZIONE DELLE ARTI E DEI NODI DEL MULTILAYER
+edges_multi <- eurovision_multi |>  
+  select(from = From_Layer, to = To_Layer, Points, Year)
+
+nodes_multi <- data.frame(
+  name = unique(c(edges_multi$from, edges_multi$to))
+) |> 
+  mutate(
+    Paese = sub("_[0-9]+$", "", name),
+    Anno = as.numeric(sub("^.*_", "", name))
+  )
+
+# Creiamo i legami verticali (inter-layer) per unire lo stesso paese nel tempo
+inter_layers <- nodes_multi |> 
+  group_by(Paese) |> 
+  arrange(Anno) |> 
+  mutate(next_name = lead(name)) |> 
+  filter(!is.na(next_name)) |> 
+  ungroup() |> 
+  select(from = name, to = next_name) |> 
+  mutate(Points = 1, Year = 0)
+
+edges_totali <- rbind(edges_multi, inter_layers)
+
+# Creazione del grafo temporaneo per calcolare la centralità a monte
+g_temp <- graph_from_data_frame(d = edges_totali, vertices = nodes_multi, directed = TRUE)
+
+# Calcolo del grado (In-Degree) e creazione della variabile Focus per il colore
+nodes_multi$Grado_In <- degree(g_temp, mode = "in")
+
+# CONDIZIONE DI FOCUS: Identifichiamo l'Italia per differenziarla cromaticamente
+nodes_multi <- nodes_multi |> 
+  mutate(Is_Italy = ifelse(Paese == "Italy", "Italia", "Altri Paesi"))
+
+# Ricreiamo il grafo definitivo
+g_multilayer <- graph_from_data_frame(d = edges_totali, vertices = nodes_multi, directed = TRUE)
+tbl_multilayer <- as_tbl_graph(g_multilayer)
+
+# Salviamo gli attributi degli archi come variabili semplici
+E(tbl_multilayer)$Anno_Arco <- edges_totali$Year
+E(tbl_multilayer)$Punti_Arco <- edges_totali$Points
+
+# 3. ALGORITMO DI LAYOUT GEOMETRICO A PIANI SFALSATI
+set.seed(42)
+layout_base2d <- layout_with_fr(graph_from_data_frame(edges_multi, directed = TRUE))
+nodi_unici_nomi <- V(graph_from_data_frame(edges_multi, directed = TRUE))$name
+
+coordinate_nodi_temporanei <- data.frame(
+  Paese = sub("_[0-9]+$", "", nodi_unici_nomi),
+  x = layout_base2d[, 1],
+  y = layout_base2d[, 2]
+) |>  
+  group_by(Paese) |>  
+  summarize(x = mean(x), y = mean(y), .groups = 'drop')
+
+layout_finalissimo <- nodes_multi |> 
+  left_join(coordinate_nodi_temporanei, by = "Paese") |> 
+  mutate(
+    Fattore_Sfasamento = case_when(
+      Anno == 2018 ~ 0,
+      Anno == 2019 ~ 5,
+      Anno == 2021 ~ 10
+    ),
+    x = x + (Fattore_Sfasamento * 0.7),
+    y = y + (Fattore_Sfasamento * 1.5)
+  ) |> 
+  select(x, y, name)
+
+# 4. PLOT FINALE HARMONIZED CON GGRAPH
+ggraph(tbl_multilayer, layout = layout_finalissimo) +
+  # Linee tratteggiate verticali di collegamento temporale (inter-layer)
+  geom_edge_link(
+    aes(filter = (Anno_Arco == 0)),
+    color = "#94a3b8",
+    linetype = "dotted",
+    alpha = 0.3,
+    width = 0.4
+  ) +
+  # I flussi reali di voto (intra-layer) con alpha ridotto per diminuire la confusione
+  geom_edge_link(
+    aes(filter = (Anno_Arco > 0), color = as.factor(Anno_Arco), alpha = Punti_Arco),
+    arrow = arrow(length = unit(1.0, 'mm')),
+    end_cap = circle(2, 'mm'),
+    width = 0.35
+  ) +
+  # NODI: Il colore viene pilotato da 'Is_Italy' per accendere solo l'Italia
+  geom_node_point(
+    aes(size = Grado_In, color = Is_Italy, fill = Is_Italy),
+    shape = 21,       # Consente di avere bordo e riempimento separati
+    stroke = 0.5,
+    alpha = 0.9
+  ) +
+  # Label dell'Italia elegante e ad alta leggibilità
+  geom_node_text(
+    aes(label = ifelse(Paese == "Italy", paste("Italy", Anno), "")),
+    fontface = "bold",
+    color = "#1e293b",
+    vjust = -1.2,
+    size = 3.5
+  ) +
+  # Configurazione cromatica degli archi (I 3 layer temporali)
+  scale_edge_color_manual(
+    values = c("2018" = "#60a5fa", "2019" = "#fbbf24", "2021" = "#f472b6"),
+    name = "Edizione (Layer)"
+  ) +
+  scale_edge_alpha_continuous(range = c(0.1, 0.6), guide = "none") +
+  # Configurazione cromatica dei Nodi (Grigio per tutti, Rosso/Fucsia per Italia)
+  scale_color_manual(
+    values = c("Altri Paesi" = "#cbd5e1", "Italia" = "#e11d48"),
+    guide = "none"
+  ) +
+  scale_fill_manual(
+    values = c("Altri Paesi" = "#f1f5f9", "Italia" = "#f43f5e"),
+    name = "Focus Paese"
+  ) +
+  scale_size_continuous(name = "In-Degree (Televoti)", range = c(1.5, 6)) +
+  labs(
+    title = "Network Multilayer Longitudinale del Televoto",
+    subtitle = "Evoluzione dei flussi con evidenza empirica della traiettoria italiana (2018-2021)",
+    caption = "I pilastri verticali puntinati uniscono lo stesso Stato attraverso i diversi layer temporali."
+  ) +
+  theme_graph() +
+  theme(
+    plot.title = element_text(face = "bold", size = 13, color = "#0f172a"),
+    plot.subtitle = element_text(size = 10, color = "#475569"),
+    legend.position = "right",
+    legend.title = element_text(face = "bold", size = 9),
+    legend.text = element_text(size = 8)
+  )
+
+```
+
+L'algoritmo di disposizione spaziale (layout) ha raggruppato i nodi in tre macro-cluster nettamente separati, identificati dai colori delle linee: blu in basso (2018), giallo al centro (2019) e fucsia in alto (2021). Questa forte separazione geometrica dimostra che i flussi di voto interni a ciascuna annata sono estremamente densi. Le preferenze del pubblico sono cioè fortemente condizionate dal contesto e dai brani in gara in quel preciso anno, creando strutture comunitarie temporanee che si chiudono in se stesse all'interno del singolo strato.
+Le linee verticali tratteggiate in grigio chiaro rappresentano i legami inter-layer, ovvero i canali che collegano ogni singolo Stato a se stesso nel corso del tempo. Visivamente, questi pilastri fungono da "ancore" strutturali: mantengono i tre piani allineati e dimostrano che, nonostante i flussi di voto cambino drasticamente da un anno all'altro a seconda delle canzoni, esiste una memoria storica sotterranea che stabilizza la rete sul piano longitudinale.
+
+* **Italy 2018 (Layer Blu)**: Si colloca nella parte inferiore del primo cluster. Presenta una dimensione del nodo medio-piccola e si trova in una posizione periferica rispetto al nucleo centrale blu. Questo indica che nel 2018 l'In-Degree (la quantità di televoti ricevuti) era contenuto e proveniva da una sotto-rete ristretta di partner.
+
+* **Italy 2019 (Layer Giallo)**: Nel piano centrale, il nodo subisce una contrazione spaziale verso destra, andandosi a posizionare sul margine destro di un ammasso di nodi estremamente fitto e compatto. In termini di rete, questa forte vicinanza geometrica indica un cluster ad altissima densità: l'Italia si trova al centro di un blocco di paesi con comportamenti di voto altamente reciproci, stabili e concentrati.
+
+* **Italy 2021 (Layer Fucsia)**: Il cluster fucsia del 2021 si sviluppa lungo una struttura diagonale fortemente allungata. La forma allungata del piano del 2021 mostra che la rete si è polarizzata su due poli opposti (estremità destra ed estremità sinistra). La posizione dell'Italia sul lato sinistro indica che il paese esercita (e subisce) una forza di attrazione magnetica specifica verso quella metà del network. L'Italia è circondata da un folto gruppo di nodi a brevissima distanza geometrica, che indica un'altissima densità locale di relazioni. Nello spazio del grafo, questa vicinanza significa che l'Italia condivide con i paesi limitrofi la stessa identica rete di flussi.
+
+I dati visivi dimostrano che la vittoria dell'Italia nel 2021 non si è configurata come un'anomalia statistica isolata (che avrebbe generato un singolo nodo gigante e staccato da tutto), ma come un fenomeno di polarizzazione collettiva. Il brano ha spinto un intero macro-blocco di paesi del layer fucsia a convergere verso la stessa direzione spaziale, espandendo la ragnatela dei flussi di voto e distribuendo la centralità in modo più diffuso rispetto alla forte chiusura geopolitica osservata nel cluster giallo del 2019.
+
+
+
+
+# PARTE II: TEXT MINING
+
+```{r, include=FALSE, message=FALSE, warning=FALSE}
+
+library(factoextra)
+library(FactoMineR)
+library(syuzhet)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+```
+
+## Sentiment Analysis globale
+
+La struttura semantica globale dell'Eurovision 2021 è governata da una netta prevalenza dell'asse positivo, dove i picchi gemelli di Gioia e Fiducia confermano la natura intrinsecamente aggregativa e ottimista del festival, storicamente orientata alla celebrazione e alla coesione linguistica e culturale. Questa spinta ideale è sostenuta da un'elevata dose di Anticipazione, che introduce nei testi una forte tensione narrativa verso il futuro, il cambiamento e la rivalsa generazionale, tipica delle strutture ritmiche della musica pop contemporanea.
+
+Le componenti più drammatiche, rappresentate da Tristezza e Paura, si attestano su un livello intermedio e perfettamente bilanciato. Questo equilibrio dimostra che il corpus non scade mai in una linearità banale, ma accoglie una stratificazione espressiva capace di dare voce anche a intime confessioni personali o a ballad malinconiche. Al contrario, le emozioni più viscerali e respingenti dello spettro di Plutchik, come Rabbia e Disgusto, rimangono nettamente confinate sul fondo della classifica, a testimonianza del fatto che l'aggressività e la rottura semantica radicale siano rimaste scelte stilistiche d'élite, circoscritte a pochissimi brani di rottura come quello dell'Italia.
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+# Caricamento del dataset pulito (interamente in inglese)
+dataset_testi <- read.csv("Eurovision2021_testi_clean.csv", stringsAsFactors = FALSE)
+
+# Calcolo della matrice dei sentimenti usando il dizionario NRC
+# get_nrc_sentiment analizza ogni riga del testo e restituisce i punteggi delle 10 categorie
+matrice_sentiment <- get_nrc_sentiment(dataset_testi$Lyrics_en)
+
+# Uniamo i risultati emotivi con i metadati del Paese e dell'Artista
+dataset_sentiment <- cbind(
+  dataset_testi |>  select(Country, Artist.name, Song.Name), 
+  matrice_sentiment
+)
+
+
+# Aggreghiamo i sentimenti per Paese 
+# Normalizziamo i punteggi per riga in modo che la somma delle emozioni sia confrontabile
+emozioni_aree <- dataset_sentiment |> 
+  select(Country, anger, anticipation, disgust, fear, joy, sadness, surprise, trust) |> 
+  pivot_longer(cols = -Country, names_to = "Emotion", values_to = "Score")
+
+# Calcoliamo la somma totale per emozione per ordinare e colorare in modo coerente
+emozioni_somma <- emozioni_aree |> 
+  group_by(Emotion) |> 
+  summarise(Total_Score = sum(Score)) |> 
+  mutate(Emotion = case_when(
+    Emotion == "anger"        ~ "Rabbia",
+    Emotion == "anticipation" ~ "Anticipazione",
+    Emotion == "disgust"      ~ "Disgusto",
+    Emotion == "fear"         ~ "Paura",
+    Emotion == "joy"          ~ "Gioia",
+    Emotion == "sadness"      ~ "Tristezza",
+    Emotion == "surprise"     ~ "Sorpresa",
+    Emotion == "trust"        ~ "Fiducia"
+  ))
+
+ggplot(emozioni_somma, aes(x = reorder(Emotion, Total_Score), y = Total_Score, fill = Total_Score)) +
+  geom_bar(stat = "identity", width = 0.6, alpha = 0.9) +
+  coord_flip() +
+  scale_fill_gradient(low = "#94a3b8", high = "#1e3a8a") +
+  theme_minimal(base_size = 11) +
+  labs(
+    title = "Profilo Emotivo Globale dei Testi",
+    subtitle = "Frequenza cumulativa dei termini emozionali (Modello di Plutchik) - Eurovision 2021",
+    x = NULL, # Rimuove l'etichetta dell'asse X (che ora è verticale) perché i nomi delle emozioni si spiegano da soli
+    y = "Punteggio Cumulativo Assoluto"
+  ) +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, color = "#0f172a", margin = margin(b = 4)),
+    plot.subtitle = element_text(size = 10, color = "#475569", margin = margin(b = 15)),
+
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_line(color = "#e2e8f0", linetype = "dashed"),
+    axis.text.y = element_text(face = "bold", color = "#334155", size = 11),
+    axis.text.x = element_text(color = "#475569"),
+
+    legend.position = "none"
+  )
+```
+
+
+## Sentiment Analysis TOP 3
+
+```{r sentiment-top3-fixed, echo=FALSE, message=FALSE, warning=FALSE}
+
+# 1. Caricamento del dataset dei testi puliti
+dataset_testi <- read.csv("Eurovision2021_testi_clean.csv", stringsAsFactors = FALSE)
+
+# Rimozione di eventuali spazi vuoti nascosti nei nomi dei paesi
+dataset_testi$Country <- trimws(dataset_testi$Country)
+
+# 2. Calcolo del sentiment sul testo inglese garantito
+emozioni_raw <- get_nrc_sentiment(dataset_testi$Lyrics_en)
+
+# Unione dei metadati puliti con le emozioni calcolate
+dataset_sentiment <- cbind(
+  dataset_testi |>  select(Country, Song.Name),
+  emozioni_raw
+)
+
+# 3. Definizione della Top 3 del Televoto (in minuscolo per la massima compatibilità)
+top3_ricerca <- tolower(c("Italy", "Ukraine", "France"))
+
+# 4. Filtro e ristrutturazione del dataset
+df_long_top3 <- dataset_sentiment |> 
+  mutate(Country_lower = tolower(Country)) |> 
+  filter(Country_lower %in% top3_ricerca) |> 
+  select(Country, anger, anticipation, disgust, fear, joy, sadness, surprise, trust) |> 
+  drop_na() |> 
+  pivot_longer(cols = anger:trust, names_to = "Emozione", values_to = "Punteggio") |> 
+  mutate(Emozione = case_when(
+    Emozione == "anger"        ~ "Rabbia",
+    Emozione == "anticipation" ~ "Anticipazione",
+    Emozione == "disgust"      ~ "Disgusto",
+    Emozione == "fear"         ~ "Paura",
+    Emozione == "joy"          ~ "Gioia",
+    Emozione == "sadness"      ~ "Tristezza",
+    Emozione == "surprise"     ~ "Sorpresa",
+    Emozione == "trust"        ~ "Fiducia",
+    TRUE                       ~ as.character(Emozione)
+  ))
+
+# Uniformiamo i nomi ufficiali con le maiuscole corrette per l'asse del grafico
+df_long_top3$Country <- tools::toTitleCase(tolower(df_long_top3$Country))
+
+# Ordiniamo i fattori dei paesi secondo il posizionamento reale del televoto (1°, 2°, 3°)
+df_long_top3$Country <- factor(df_long_top3$Country, levels = c("Italy", "Ukraine", "France"))
+
+# 5. Generazione del grafico facettato a 3 colonne
+grafico_sentiment_top3 <- ggplot(df_long_top3, aes(x = reorder(Emozione, Punteggio), y = Punteggio, fill = Country)) +
+  geom_bar(stat = "identity", width = 0.7, show.legend = FALSE) +
+  coord_flip() + 
+  facet_wrap(~ Country, ncol = 3) + # 3 colonne perfette affiancate
+  # Palette di colori dedicata per il podio
+  scale_fill_manual(values = c("#fe0000", "#00f0ff", "#7000ff")) +
+  labs(
+    title = "Profilo Emotivo dei Testi: Podio del Televoto Eurovision 2021",
+    subtitle = "Frequenza dei termini emozionali (NRC) nei tre brani più votati dal pubblico da casa",
+    x = NULL,
+    y = "Intensità del Sentiment (Punteggio Cumulativo)"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    plot.title = element_text(face = "bold", size = 13, color = "#1e293b"),
+    plot.subtitle = element_text(size = 10, color = "#64748b"),
+    strip.text = element_text(face = "bold", size = 11, color = "#ffffff"),
+    strip.background = element_rect(fill = "#1e293b", color = NA),
+    panel.grid.minor = element_blank(),
+    axis.text.y = element_text(face = "bold"),
+    panel.spacing = unit(1.5, "lines")
+  )
+
+print(grafico_sentiment_top3)
+```
+
+
+Il successo al televoto nell'Eurovision 2021 non è stato guidato da un unico standard testuale, ma dalla polarizzazione di tre "impronte digitali emotive" radicalmente contrapposte. L'algoritmo NRC mostra come i tre paesi sul podio abbiano intercettato il favore del pubblico battendo strade semantiche completamente differenti.
+
+* **Italy (Zitti e buoni – Måneskin)**: L'energia della tensione e della rivalsa.
+Il profilo emotivo dell'Italia è fortemente sbilanciato verso le dimensioni dell'Anticipazione e della Paura (entrambe con un punteggio di 6). In un contesto rock di rottura, la "paura" e l'attivazione emotiva dell'anticipazione non indicano codardia, ma descrivono una narrazione tesa, incentrata sulla pressione sociale e sul superamento del giudizio altrui. È interessante notare come la Rabbia e il Disgusto registrino valori significativi rispetto agli altri paesi sul podio, a conferma di un testo marcatamente anticonformista e di critica generazionale.
+
+* **Ukraine (Shum – Go_A)**: L'ottimismo rituale e comunitario.
+Il profilo dell'Ucraina rappresenta l'esatto opposto semantico delle ballad o del rock arrabbiato. Qui dominano in modo assoluto la Gioia (punteggio pari a 7) e la Fiducia (punteggio pari a 6). Essendo il testo radicato in un rito folcloristico legato al risveglio della primavera e all'unione comunitaria, il vocabolario è dominato da termini associati alla celebrazione, alla natura e alla solarità. Le emozioni negative come tristezza, rabbia e disgusto sono ridotte al minimo matematico, configurando il brano come una scarica di pura positività e ritmo.
+
+* **France (Voilà – Barbara Pravi)**: Il dramma e l'introspezione esistenziale.
+La Francia propone la struttura testuale più profonda e malinconica del podio. Il grafico mostra un picco isolato e imponente di Tristezza (punteggio pari a 7), accompagnato da una forte componente di Paura (punteggio pari a 4). Questi dati catturano perfettamente l'essenza della chanson francese presentata: un testo intimista, vulnerabile, incentrato sulla messa a nudo dell'artista di fronte al proprio pubblico, dove il senso di solitudine e la richiesta di accettazione ("Voilà") emergono chiaramente dalle metriche computazionali.
+
+
+## Analisi delle corrispondenze
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+
+# Prepariamo la tabella di contingenza per la CA
+# Righe = Paesi, Colonne = Le 8 Emozioni primarie di Plutchik
+matrice_ca <- dataset_sentiment |> 
+  group_by(Country) |> 
+  summarise(
+    Anger = sum(anger),
+    Anticipation = sum(anticipation),
+    Disgust = sum(disgust),
+    Fear = sum(fear),
+    Joy = sum(joy),
+    Sadness = sum(sadness),
+    Surprise = sum(surprise),
+    Trust = sum(trust)
+  )
+
+# Trasformiamo la colonna Country in etichette di riga 
+matrice_ca_R <- as.data.frame(matrice_ca)
+rownames(matrice_ca_R) <- matrice_ca_R$Country
+matrice_ca_R$Country <- NULL
+
+# Rimozione di eventuali righe con soli zeri (paesi i cui testi non hanno intercettato parole emotive)
+matrice_ca_R <- matrice_ca_R[rowSums(matrice_ca_R) > 0, ]
+
+# Esecuzione dell'Analisi delle Corrispondenze
+risultato_ca <- CA(matrice_ca_R, graph = FALSE)
+
+# Estrazione degli autovalori per commentare l'inerzia (varianza) spiegata nei capitoli del report
+autovalori <- risultato_ca$eig
+
+# Generazione del Biplot Simmetrico dell'Analisi delle Corrispondenze
+fviz_ca_biplot(
+  risultato_ca, 
+  repel = TRUE,              
+  col.row = "steelblue",    
+  col.col = "firebrick",     
+  arrow = c(FALSE, TRUE),    
+  title = "Mappa Geometrica delle Corrispondenze: Paesi vs Profili Emotivi"
+) +
+theme_bw()
+```
+
+
+Il biplot mostra la proiezione simultanea nello spazio bidimensionale dei 39 Paesi partecipanti (punti blu) e delle 8 emozioni primarie del modello di Plutchik (vettori rossi). Il sistema spiega complessivamente il **69.0% della varianza totale** dei dati, un livello di inerzia eccezionalmente elevato che garantisce un'altissima affidabilità statistica alle distanze geometriche rappresentate. L'asse verticale (**Dim 2: 49.2%**) costituisce la principale direttrice di variabilità del dataset, integrata dall'asse orizzontale (**Dim 1: 19.8%**).
+
+Per garantire la massima efficacia interpretativa e isolare i reali pattern artistici, lo spazio geometrico è stato filtrato escludendo i paesi posizionati in stretta prossimità dell'origine degli assi (profilo medio generalista della kermesse). Questa operazione di de-noising statistico permette di focalizzare l'analisi esclusivamente sulle nazioni che presentano un'inerzia (varianza) significativa, ovvero quelle i cui testi deviano in modo netto dalla media del festival, esprimendo una precisa e marcata identità emotiva secondo il modello di Plutchik.
+
+La distribuzione geometrica mappa i paesi in quattro macro-aree semantiche (quadranti):
+
+* **Quadrante I (Alto-Destra) – L'area della Paura e del Disgusto:** Caratterizzato da una spinta proiettiva ed energetica.
+I testi di queste nazioni ricorrono a un vocabolario basato sull'azione imminente, sul movimento e sulla scarica ritmica, fortemente attratti verso l'alto dall'asse principale della Surprise. L'Italia si trova molto in alto, proiettata nettamente lungo la direzione del vettore Fear (Paura). Significa che nel testo analizzato l'Italia è fortemente caratterizzata da questa emozione. Più a destra troviamo Russia e San Marino, posizionati nella zona d'influenza tra Fear, Disgust e Anger. Mostrano profili emotivi legati a sentimenti generalmente negativi o di tensione. 
+
+* **Quadrante II (Alto-Sinistra) – L'area della Sorpresa e dell'Attesa** 
+La Spagna si trova vicino al centro ma orientata verso Anticipation (Trepidazione/Aspettativa) e Surprise. Svizzera e Danimarca si trovano molto a sinistra. Sono geograficamente opposte a emozioni come Disgust, Anger e Sadness. Questo significa che la Danimarca e la Svizzera hanno i livelli più bassi in assoluto di rabbia e tristezza all'interno del corpus.
+
+* **Quadrante III (Basso-Sinistra) – L'area della Fiducia e della Gioia:** I vettori Trust (Fiducia) e Joy (Gioia) tirano verso questa zona. 
+L'Ucraina si trova in questo quadrante, molto isolata in basso a sinistra. È orientata nella stessa macro-direzione di Trust e Joy, ma la sua distanza estrema sull'asse orizzontale (Dim1 a -0.6) indica una forte polarizzazione: è il Paese che più si distacca dai profili emotivi di "rabbia/tristezza/paura" tipici del blocco di destra (Francia, Albania, Russia, San Marino).
+
+* **Quadrante IV (Basso-Destra) – L'area della Tristezza e della Rabbia:** L'Albania e la Francia sono fortemente orientate verso il vettore Sadness (Tristezza) e risentono molto anche di Anger (Rabbia). L'Albania, in particolare, è quasi perfettamente sovrapposta alla coda del vettore della tristezza, indicando una presenza massiccia di questa emozione nei dati relativi a quel Paese. La Serbia si trova in basso al centro, catturata parzialmente dalla dinamica della tristezza ma proiettata negativamente rispetto alla paura (è opposta a Italy).
+
+
+
+
+
+
